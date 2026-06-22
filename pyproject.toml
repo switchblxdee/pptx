@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pptx-generator"
+version = "0.5.0"
+description = "LangChain-инструмент генерации корпоративных дайджестов .pptx (GigaChat) с бренд-стилем SberF1"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "python-pptx>=1.0",
+    "pandas",
+    "openpyxl",
+    "pydantic>=2",
+    "lxml",
+    "Pillow",
+    "langchain-core",
+]
+
+[project.optional-dependencies]
+gigachat = ["langchain-gigachat"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pptx_generator*"]
+
+[tool.setuptools.package-data]
+pptx_generator = ["assets/*.png", "assets/icons/*.png"]

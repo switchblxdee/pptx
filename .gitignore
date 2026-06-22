@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+*.pptx
+*.pdf
+!pptx_generator/assets/**
+.DS_Store
+.idea/
+.vscode/
+*.log
+/tmp/

@@ -1,0 +1,8 @@
+python-pptx>=1.0
+pandas
+openpyxl
+pydantic>=2
+lxml
+Pillow
+langchain-core
+langchain-gigachat
