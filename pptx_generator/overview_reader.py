@@ -25,21 +25,24 @@ logger = logging.getLogger(__name__)
 # Порядок важен: первое совпадение выигрывает. Можно расширять.
 HINTS = {
     "cluster_l1": ["кластер 1", "кластер1", "кластер_1", "1 уровн", "первого уровн",
-                   "продукт", "группа", "родител", "parent", "l1"],
-    "cluster_l2": ["кластер 2", "кластер2", "кластер_2", "2 уровн", "второго уровн",
-                   "тема", "подкластер", "child", "l2"],
-    "source": ["источник", "канал", "чат", "source", "площадк"],
+                   "объект сигнал", "продукт", "группа", "родител", "parent", "l1", "объект"],
+    "cluster_l2": ["кластер сигналов 2", "кластер 2", "кластер2", "кластер_2",
+                   "2 уровн", "второго уровн", "тема", "подкластер", "child", "l2"],
+    "source": ["источник сигнал", "канал", "чат", "source", "площадк", "источник"],
     "source_block": ["блок", "тип источ", "категория источ", "группа источ",
                      "вид источ", "сегмент", "раздел источ"],
-    "text": ["текст", "сообщени", "цитат", "обращени", "feedback", "комментар",
-             "отзыв", "реплик"],
-    "status": ["статус", "боль", "анализ", "состояни", "метк"],
-    "count": ["упомин", "кол-во", "количеств", "count", "частот", "число сигнал"],
-    "is_new": ["нов", "new"],
+    "text": ["текст из источника обратной связи", "текст", "сообщени", "цитат",
+             "обращени", "feedback", "комментар", "отзыв", "реплик"],
+    "status": ["статус", "в списке бол", "на анализе", "состояни", "метк болей"],
+    "count": ["упомин", "кол-во сигнал", "количеств сигнал", "count", "частот"],
+    "is_new": ["призн нов", "флаг нов", "is_new", "новая тема"],
 }
 DYN_HINTS = {
-    "key": ["кластер 2", "кластер2", "2 уровн", "тема", "кластер", "название", "l2", "name"],
-    "pct": ["%", "процент", "динамик", "изменени", "к прошл", "рост", "delta", "дельта"],
+    "key": ["тема", "кластер 2", "кластер2", "2 уровн", "название", "l2", "name"],
+    "product": ["продукт", "объект", "группа", "product"],
+    "current": ["текущ", "current", "этой недел", "за неделю"],
+    "previous": ["прошл", "previous", "предыдущ"],
+    "pct": ["динамик", "%", "процент", "изменени", "к прошл", "delta", "дельта"],
 }
 
 
@@ -117,8 +120,9 @@ def read_overview(
     c_count, c_new = cols["count"], cols["is_new"]
 
     df = df.dropna(subset=[c_l2])
+    l1_fallback = c_l1 if c_l1 != c_l2 else None  # напр. «Объект сигнала»
 
-    # ---- агрегация тем по группам ----
+    # ---- агрегаты по теме (кластер 2 уровня) ----
     def _mentions(sub) -> int:
         if c_count and c_count in sub:
             try:
@@ -133,7 +137,6 @@ def read_overview(
         vals = [str(v).strip() for v in sub[c_text].dropna().tolist() if str(v).strip()]
         if not vals:
             return None
-        # самая содержательная, но не слишком длинная
         vals.sort(key=lambda s: (-(len(s) <= 300), -len(s)))
         return vals[0][:380]
 
@@ -146,31 +149,54 @@ def read_overview(
     def _is_new(sub) -> bool:
         if c_new and c_new in sub:
             return bool(pd.to_numeric(sub[c_new], errors="coerce").fillna(0).sum() > 0)
-        st = _status(sub) or ""
-        return "нов" in st.lower() or "new" in st.lower()
+        st = (_status(sub) or "").lower()
+        return "нов" in st or "new" in st
 
-    groups_map: Dict[str, List[Tuple[str, int, Optional[str], Optional[str], bool]]] = {}
-    for (l1, l2), sub in df.groupby([c_l1, c_l2], sort=False):
-        groups_map.setdefault(str(l1), []).append(
-            (str(l2), _mentions(sub), _quote(sub), _status(sub), _is_new(sub))
+    topics_by_l2: Dict[str, dict] = {}
+    l1_by_l2: Dict[str, Optional[str]] = {}
+    for l2, sub in df.groupby(c_l2, sort=False):
+        topics_by_l2[str(l2)] = dict(
+            mentions=_mentions(sub), quote=_quote(sub),
+            status=_status(sub), is_new=_is_new(sub),
         )
+        if l1_fallback:
+            v = sub[l1_fallback].dropna()
+            l1_by_l2[str(l2)] = str(v.iloc[0]) if len(v) else None
 
-    # ---- динамика: тема -> % ----
-    dyn: Dict[str, float] = {}
+    # ---- лист «динамика»: тема -> продукт(=группа) и % ----
+    dyn_pct: Dict[str, float] = {}
+    dyn_product: Dict[str, str] = {}
     if dyn_sheet:
         dd = xls.parse(dyn_sheet)
         dd.columns = [str(c) for c in dd.columns]
         dk = mapping.get("dyn_key") or _find_col(dd, DYN_HINTS["key"])
+        dprod = mapping.get("dyn_product") or _find_col(dd, DYN_HINTS["product"])
+        dcur = mapping.get("dyn_current") or _find_col(dd, DYN_HINTS["current"])
+        dprev = mapping.get("dyn_previous") or _find_col(dd, DYN_HINTS["previous"])
         dp = mapping.get("dyn_pct") or _find_col(dd, DYN_HINTS["pct"])
-        report["dyn_key"] = dk
-        report["dyn_pct"] = dp
-        report["_dyn_columns"] = list(dd.columns)
-        if dk and dp:
+        report.update(dyn_key=dk, dyn_product=dprod, dyn_current=dcur,
+                      dyn_previous=dprev, dyn_pct=dp, _dyn_columns=list(dd.columns))
+        if dk:
             for _, row in dd.iterrows():
                 key = _norm(row[dk])
-                val = pd.to_numeric(row[dp], errors="coerce")
-                if key and pd.notna(val):
-                    dyn[key] = float(val)
+                if not key:
+                    continue
+                if dprod and pd.notna(row[dprod]):
+                    dyn_product[key] = str(row[dprod]).strip()
+                # % считаем из счётчиков, если есть; иначе берём колонку «динамика»
+                pct = None
+                if dcur and dprev:
+                    cur = pd.to_numeric(row[dcur], errors="coerce")
+                    prev = pd.to_numeric(row[dprev], errors="coerce")
+                    if pd.notna(cur) and pd.notna(prev) and prev != 0:
+                        pct = (cur - prev) / prev * 100.0
+                if pct is None and dp:
+                    raw = pd.to_numeric(row[dp], errors="coerce")
+                    if pd.notna(raw):
+                        # доля (0.22) -> проценты; уже проценты оставляем
+                        pct = float(raw) * 100.0 if abs(raw) <= 1 else float(raw)
+                if pct is not None:
+                    dyn_pct[key] = float(pct)
 
     # ---- источники по блокам ----
     source_blocks: List = []
@@ -186,29 +212,34 @@ def read_overview(
             tags = sorted({str(s).strip() for s in df[c_src].dropna() if str(s).strip()})
             source_blocks = [SourceBlock(title="Источники", tags=tags)]
 
-    # ---- сборка групп/тем ----
+    # ---- группировка тем по продукту (из «динамика», иначе L1, иначе «Прочее») ----
+    group_topics: Dict[str, List[Tuple[str, dict]]] = {}
+    for l2, facts in topics_by_l2.items():
+        prod = dyn_product.get(_norm(l2)) or l1_by_l2.get(l2) or "Прочее"
+        group_topics.setdefault(prod, []).append((l2, facts))
+
     groups: List = []
     new_count = 0
-    for gname, topics in groups_map.items():
-        topics.sort(key=lambda t: -t[1])  # по упоминаниям
+    for prod, items in group_topics.items():
+        items.sort(key=lambda x: -x[1]["mentions"])
         ov_topics = []
-        for (l2, ment, quote, status, isnew) in topics[:max_topics_per_group]:
-            if isnew:
+        for l2, facts in items[:max_topics_per_group]:
+            if facts["is_new"]:
                 new_count += 1
             ov_topics.append(OverviewTopic(
-                title=l2, quote=quote, mentions=ment,
-                dynamics_pct=dyn.get(_norm(l2)),
-                status=("new" if isnew and not status else status),
+                title=l2, quote=facts["quote"], mentions=facts["mentions"],
+                dynamics_pct=dyn_pct.get(_norm(l2)),
+                status=("new" if facts["is_new"] and not facts["status"] else facts["status"]),
             ))
         gtotal = sum(t.mentions for t in ov_topics)
-        groups.append((gtotal, ProductGroup(name=gname, topics=ov_topics)))
+        groups.append((gtotal, ProductGroup(name=str(prod), topics=ov_topics)))
     groups.sort(key=lambda x: -x[0])
     groups = [g for _, g in groups[:max_groups]]
 
     # ---- KPI ----
-    total_signals = sum(_mentions(sub) for _, sub in df.groupby([c_l1, c_l2], sort=False))
+    total_signals = sum(f["mentions"] for f in topics_by_l2.values())
     n_sources = df[c_src].nunique() if c_src else 0
-    n_topics = df[c_l2].nunique()
+    n_topics = len(topics_by_l2)
     kpis = [
         OverviewKPI(value=str(int(total_signals)), label="Сигналов проанализировано", icon_hint="signal"),
         OverviewKPI(value=str(int(n_sources)), label="Источников обратной связи", icon_hint="search"),
@@ -220,7 +251,6 @@ def read_overview(
         title=title, subtitle=subtitle, kpis=kpis,
         source_blocks=source_blocks, groups=groups,
     )
-
     logger.info("Overview-маппинг: %s", {k: v for k, v in report.items()
                                          if not k.startswith("_")})
     return overview, report
@@ -233,14 +263,17 @@ def format_report(report: Dict) -> str:
              f"  лист динамики: {report.get('_dyn_sheet')}",
              "  колонки -> роли:"]
     roles = ["cluster_l1", "cluster_l2", "source", "source_block",
-             "text", "status", "count", "is_new", "dyn_key", "dyn_pct"]
+             "text", "status", "count", "is_new",
+             "dyn_key", "dyn_product", "dyn_current", "dyn_previous", "dyn_pct"]
     human = {
         "cluster_l1": "группа/продукт (кластер 1)",
         "cluster_l2": "тема (кластер 2)",
         "source": "источник", "source_block": "блок источника",
         "text": "текст/цитата", "status": "статус",
         "count": "кол-во упоминаний", "is_new": "признак новизны",
-        "dyn_key": "ключ в 'динамика'", "dyn_pct": "% в 'динамика'",
+        "dyn_key": "'динамика': ключ-тема", "dyn_product": "'динамика': продукт=группа",
+        "dyn_current": "'динамика': кол-во тек. неделя", "dyn_previous": "'динамика': кол-во прош. неделя",
+        "dyn_pct": "'динамика': готовый %",
     }
     for r in roles:
         col = report.get(r)

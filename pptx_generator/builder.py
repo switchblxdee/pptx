@@ -346,10 +346,13 @@ class DigestBuilder:
         if not blocks:
             return y
         col_split = MARGIN_X + int(Inches(7.45))
-        cols = [
-            (MARGIN_X, MARGIN_X + int(Inches(7.15))),
-            (col_split, int(self._OV_RIGHT)),
-        ]
+        if len(blocks) == 1:
+            cols = [(MARGIN_X, int(self._OV_RIGHT))]  # один блок — на всю ширину
+        else:
+            cols = [
+                (MARGIN_X, MARGIN_X + int(Inches(7.15))),
+                (col_split, int(self._OV_RIGHT)),
+            ]
         y_end = y
         for bi, blk in enumerate(blocks[:2]):
             cx0, cx1 = cols[bi] if bi < len(cols) else cols[-1]
