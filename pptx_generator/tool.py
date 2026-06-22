@@ -50,8 +50,9 @@ class GenerateDigestInput(BaseModel):
     """Входные параметры инструмента."""
     xlsx_path: str = Field(
         description=(
-            "Абсолютный путь к xlsx-файлу с двумя листами: "
-            "'Сырье' (табличные данные) и 'Суммаризация' (текст про проблемы)."
+            "Абсолютный путь к xlsx-файлу. Стандартный режим: листы 'Сырье' + "
+            "'Суммаризация'. Режим overview: листы 'исх' + 'динамика' "
+            "(определяется автоматически по их наличию)."
         )
     )
     style_prompt: str = Field(
@@ -269,7 +270,7 @@ class GenerateDigestTool(BaseTool):
     ) -> str:
         """Синхронный запуск."""
         try:
-            if layout == "overview":
+            if layout == "overview" or self._looks_like_overview(xlsx_path):
                 return self._generate_overview(
                     xlsx_path, style_prompt, output_path, force_theme,
                     overview_title, period, issue_number,
@@ -282,6 +283,18 @@ class GenerateDigestTool(BaseTool):
             logger.exception("Ошибка при генерации дайджеста")
             # Возвращаем читабельную ошибку агенту, чтобы он мог отреагировать
             return f"ОШИБКА: {type(e).__name__}: {e}"
+
+    @staticmethod
+    def _looks_like_overview(xlsx_path: str) -> bool:
+        """Авто-режим overview: в файле есть листы 'исх' и 'динамика'."""
+        try:
+            import pandas as pd
+            names = [str(n).strip().lower() for n in pd.ExcelFile(xlsx_path).sheet_names]
+            has_src = any("исх" in n for n in names)
+            has_dyn = any("динамик" in n for n in names)
+            return has_src and has_dyn
+        except Exception:
+            return False
 
     def _generate_overview(
         self,
