@@ -20,6 +20,7 @@ from .contrast import (
 from .safe import with_fallback
 from .style_resolver import parse_style_directives, merge_palette
 from .brand_icons import available_brand_hints, has_brand_icon
+from .overview_reader import read_overview, format_report
 from .schemas import (
     AttentionItem,
     AttentionSlide,
@@ -93,5 +94,8 @@ __all__ = [
     # Brand icons (SberF1)
     "available_brand_hints",
     "has_brand_icon",
+    # Overview (плотный слайд-обзор)
+    "read_overview",
+    "format_report",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0"

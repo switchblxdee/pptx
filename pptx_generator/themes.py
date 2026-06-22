@@ -40,6 +40,7 @@ class ThemePreset:
     body_font: Optional[str] = None
     bg_cover: Optional[str] = None
     bg_content: Optional[str] = None
+    priority: int = 0  # выше = важнее при детекте (бренд побеждает общие темы)
 
 
 # --------------------------------------------------------------------------- #
@@ -288,12 +289,13 @@ THEME_PRESETS: List[ThemePreset] = [
         body_font="SB Sans Display",
         bg_cover="bg_cover.png",
         bg_content="bg_content.png",
+        priority=100,  # бренд побеждает любые общие ключи ("дайджест" и т.п.)
     ),
 
 
     ThemePreset(
         name="default_teal_peach",
-        keywords=["персик", "peach", "пастель", "голос it", "референс",
+        keywords=["персик", "peach", "пастель", "референс",
                   "как образец", "стандартн"],
         palette={
             "gradient_start": "A8D8D5", "gradient_end": "F5D5BA",
@@ -320,13 +322,15 @@ def detect_theme(style_prompt: str) -> Optional[ThemePreset]:
 
     text = style_prompt.lower().replace("ё", "ё")  # нормализация не трогает ё
     best: Optional[ThemePreset] = None
-    best_key_len = 0
+    best_rank = (-1, 0)  # (priority, длина ключа)
 
     for preset in THEME_PRESETS:
         for kw in preset.keywords:
-            if kw in text and len(kw) > best_key_len:
-                best = preset
-                best_key_len = len(kw)
+            if kw in text:
+                rank = (getattr(preset, "priority", 0), len(kw))
+                if rank > best_rank:
+                    best = preset
+                    best_rank = rank
 
     return best
 

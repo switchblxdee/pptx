@@ -95,6 +95,25 @@ class GenerateDigestInput(BaseModel):
             "среди кандидатов ('Объект сигнала', 'Продукт', 'Тема' и т.п.)."
         ),
     )
+    layout: str = Field(
+        default="standard",
+        description=(
+            "Раскладка: 'standard' (обложка + детальные слайды тем) или "
+            "'overview' (НОВЫЙ плотный слайд-обзор: KPI + источники + темы по "
+            "продуктам с динамикой и статусом). Для 'overview' нужен xlsx с "
+            "листами 'исх' и 'динамика'; содержимое считается из данных без LLM."
+        ),
+    )
+    overview_title: Optional[str] = Field(
+        default=None,
+        description="Заголовок обзор-слайда (по умолчанию 'Голос IT: дайджест ...').",
+    )
+    period: Optional[str] = Field(
+        default=None, description="Период в шапке, напр. '15.06–18.06'.",
+    )
+    issue_number: Optional[str] = Field(
+        default=None, description="Номер выпуска, напр. '№ 3 / еженедельный'.",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -242,10 +261,19 @@ class GenerateDigestTool(BaseTool):
         slide_count: Optional[int] = None,
         grouping_column: Optional[str] = None,
         force_theme: Optional[str] = None,
+        layout: str = "standard",
+        overview_title: Optional[str] = None,
+        period: Optional[str] = None,
+        issue_number: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Синхронный запуск."""
         try:
+            if layout == "overview":
+                return self._generate_overview(
+                    xlsx_path, style_prompt, output_path, force_theme,
+                    overview_title, period, issue_number,
+                )
             return self._generate(
                 xlsx_path, style_prompt, output_path,
                 slide_count, grouping_column, force_theme,
@@ -254,6 +282,72 @@ class GenerateDigestTool(BaseTool):
             logger.exception("Ошибка при генерации дайджеста")
             # Возвращаем читабельную ошибку агенту, чтобы он мог отреагировать
             return f"ОШИБКА: {type(e).__name__}: {e}"
+
+    def _generate_overview(
+        self,
+        xlsx_path: str,
+        style_prompt: str,
+        output_path: Optional[str],
+        force_theme: Optional[str],
+        overview_title: Optional[str],
+        period: Optional[str],
+        issue_number: Optional[str],
+    ) -> str:
+        """НОВЫЙ РЕЖИМ: плотный слайд-обзор из листов 'исх' + 'динамика'.
+
+        Содержимое считается ИЗ ДАННЫХ детерминированно (без LLM): группы,
+        темы, упоминания, источники, статусы; проценты — из листа 'динамика'.
+        Стиль — бренд SberF1 по умолчанию (если тема не задана явно).
+        """
+        from datetime import date
+        from .schemas import DigestMeta, CoverSlide
+        from .overview_reader import read_overview, format_report
+
+        logger.info("Overview-режим. Читаю %s", xlsx_path)
+        kwargs = {}
+        if overview_title:
+            kwargs["title"] = overview_title
+        overview, report = read_overview(xlsx_path, **kwargs)
+        logger.info("\n%s", format_report(report))
+
+        # минимальный валидный spec; контент рисуется из overview
+        base_palette = ColorPalette(
+            gradient_start="FAFAF7", gradient_end="FFFFFF",
+            card_bg="FFFFFF", kpi_bg="111827",
+            text_dark="111827", text_muted="64748B",
+            accent="0669E0", badge="933EFF",
+        )
+        spec = DigestSpec(
+            style=DigestStyle(palette=base_palette),
+            meta=DigestMeta(
+                issue_date=date.today().strftime("%d.%m.%Y"),
+                period=period or "",
+                issue_number=issue_number or "№ — / еженедельный",
+            ),
+            cover=CoverSlide(title="Голос IT", subtitle=""),
+            topics=[],
+            overview=overview,
+        )
+
+        # бренд: по умолчанию SberF1 (overview задуман под него)
+        spec = self._apply_detected_palette(
+            spec, style_prompt, force_theme or "sberf1",
+        )
+
+        if output_path is None:
+            output_path = str(Path(xlsx_path).with_suffix(".pptx"))
+        result_path = DigestBuilder(spec).build(output_path)
+
+        n_topics = sum(len(g.topics) for g in overview.groups)
+        missing = [k for k in ("cluster_l2", "source", "text") if not report.get(k)]
+        warn = ("\nВНИМАНИЕ: не размечены роли: " + ", ".join(missing) +
+                ". Уточни колонки через mapping.") if missing else ""
+        return (
+            f"Готово: слайд-обзор сохранён в {result_path}. "
+            f"Групп: {len(overview.groups)}, тем: {n_topics}, "
+            f"источников: {sum(len(b.tags) for b in overview.source_blocks)}.\n"
+            f"{format_report(report)}{warn}"
+        )
 
     def _apply_detected_palette(
         self, spec: DigestSpec, style_prompt: str, force_theme: Optional[str] = None,

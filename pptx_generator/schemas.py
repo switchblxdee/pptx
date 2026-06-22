@@ -384,6 +384,57 @@ class ClosingSlide(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# НОВЫЙ РЕЖИМ: плотный слайд-обзор (overview)
+# --------------------------------------------------------------------------- #
+
+class OverviewKPI(BaseModel):
+    """Компактный KPI в шапке обзор-слайда (число + подпись + иконка)."""
+    value: str = Field(max_length=12, description="Число, напр. '476'")
+    label: str = Field(max_length=48, description="Подпись, напр. 'Сигналов проанализировано'")
+    icon_hint: Optional[str] = Field(default=None, description="Хинт иконки (signal/search/...)")
+
+
+class SourceBlock(BaseModel):
+    """Блок источников: заголовок + список тегов-пилюль."""
+    title: str = Field(max_length=40, description="напр. 'Чаты в Сберчате'")
+    tags: List[str] = Field(default_factory=list, max_length=40)
+
+
+class OverviewTopic(BaseModel):
+    """Тема в обзоре: заголовок, цитата, упоминания, динамика, статус."""
+    title: str = Field(max_length=160)
+    quote: Optional[str] = Field(default=None, max_length=400)
+    mentions: int = Field(default=0, description="Число упоминаний за период")
+    dynamics_pct: Optional[float] = Field(
+        default=None,
+        description="Изменение к прошлой неделе в %, со знаком (+22, -45). None — нет данных.",
+    )
+    status: Optional[str] = Field(
+        default=None,
+        description="Статус: 'боль' (в списке болей) | 'анализ' (кандидат) | "
+                    "'new' (новая) | текст-дата вроде '3Q 2026'.",
+    )
+
+
+class ProductGroup(BaseModel):
+    """Группа тем по продукту (кластер 1 уровня)."""
+    name: str = Field(max_length=80, description="напр. 'MCP GigaCode CLI'")
+    topics: List[OverviewTopic] = Field(default_factory=list, max_length=30)
+
+
+class OverviewSlide(BaseModel):
+    """
+    Плотный слайд-обзор: шапка + KPI + два блока источников +
+    темы по продуктам с динамикой и статусом + легенда.
+    """
+    title: str = Field(max_length=90)
+    subtitle: Optional[str] = Field(default=None, max_length=140)
+    kpis: List[OverviewKPI] = Field(default_factory=list, max_length=4)
+    source_blocks: List[SourceBlock] = Field(default_factory=list, max_length=2)
+    groups: List[ProductGroup] = Field(default_factory=list, max_length=30)
+
+
+# --------------------------------------------------------------------------- #
 # Корневая спецификация
 # --------------------------------------------------------------------------- #
 
@@ -410,8 +461,9 @@ class DigestSpec(BaseModel):
         description="Слайд с главными выводами для руководства (идёт сразу после обложки)"
     )
     topics: List[TopicSlide] = Field(
-        min_length=1, max_length=25,
-        description="Темы для детальных слайдов"
+        default_factory=list, max_length=25,
+        description="Темы для детальных слайдов (обычный режим). В режиме "
+                    "overview могут отсутствовать."
     )
     charts: List[ChartSlide] = Field(
         default_factory=list, max_length=4,
@@ -429,6 +481,11 @@ class DigestSpec(BaseModel):
     closing: Optional[ClosingSlide] = Field(
         default=None,
         description="Финальный слайд с итогами и динамикой"
+    )
+    overview: Optional[OverviewSlide] = Field(
+        default=None,
+        description="НОВЫЙ РЕЖИМ: плотный слайд-обзор. Если задан, билдер может "
+                    "отрисовать его (отдельная раскладка), не ломая обычные слайды.",
     )
 
     @field_validator("topics")

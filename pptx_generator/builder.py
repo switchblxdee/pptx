@@ -179,6 +179,14 @@ class DigestBuilder:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # НОВЫЙ РЕЖИМ: если задан overview — рисуем плотный слайд-обзор
+        # (отдельная раскладка), не трогая обычный поток слайдов.
+        if getattr(self.spec, "overview", None):
+            self._build_overview(self.spec.overview)
+            self._finalize_unique_ids()
+            self.prs.save(output_path)
+            return output_path
+
         # Считаем общее число слайдов для нумерации в футере
         total = 1  # cover
         if self.spec.executive_summary:
@@ -244,6 +252,348 @@ class DigestBuilder:
         self._finalize_unique_ids()
         self.prs.save(output_path)
         return output_path
+
+    # ======================================================================= #
+    # НОВЫЙ РЕЖИМ: плотный слайд-обзор
+    # ======================================================================= #
+
+    _OV_BOTTOM = Inches(7.02)     # нижняя граница контента (над легендой)
+    _OV_RIGHT = SLIDE_WIDTH - MARGIN_X
+    _PEACH = "F4C99A"             # плашка-заголовок группы (тёплый бренд-тон)
+
+    def _build_overview(self, ov) -> None:
+        slide = self._new_slide(cover=False)
+        self._render_meta_header(slide)
+        y = self._ov_header(slide, ov)
+        y = self._ov_subtitle_and_kpis(slide, ov, y)
+        y = self._ov_sources(slide, ov, y)
+
+        num = 1
+        for gi, g in enumerate(ov.groups):
+            need = int(Inches(0.42)) + int(Inches(0.86)) * max(1, len(g.topics))
+            if gi > 0 and y + need > int(self._OV_BOTTOM):
+                self._ov_legend(slide)
+                slide = self._new_slide(cover=False)
+                self._render_meta_header(slide)
+                y = self._ov_header(slide, ov, continued=True)
+            y, num = self._ov_group(slide, g, y, num)
+        self._ov_legend(slide)
+
+    def _ov_header(self, slide, ov, continued: bool = False) -> int:
+        title = ov.title + ("  (продолжение)" if continued else "")
+        self._add_text(
+            slide, title, left=MARGIN_X, top=Inches(0.28),
+            width=Inches(7.3), height=Inches(0.55),
+            font=self.style.typography.heading_font, size=18, bold=True,
+            color=self._text_on_background(), anchor=MSO_ANCHOR.MIDDLE,
+        )
+        return int(Inches(0.92))
+
+    def _ov_subtitle_and_kpis(self, slide, ov, y: int) -> int:
+        if ov.subtitle:
+            self._add_text(
+                slide, ov.subtitle, left=MARGIN_X, top=Emu(y),
+                width=Inches(2.65), height=Inches(0.8),
+                font=self.style.typography.body_font, size=11,
+                color=self._muted_on_background(), anchor=MSO_ANCHOR.MIDDLE,
+                line_spacing=1.1,
+            )
+        kpis = ov.kpis[:4]
+        if not kpis:
+            return y + int(Inches(0.85))
+        kx0 = MARGIN_X + int(Inches(2.85))
+        kw_total = int(self._OV_RIGHT) - kx0
+        gap = int(Inches(0.12))
+        kw = (kw_total - gap * (len(kpis) - 1)) // len(kpis)
+        kh = int(Inches(0.74))
+        for i, kpi in enumerate(kpis):
+            self._ov_kpi_card(slide, kpi, kx0 + i * (kw + gap), y, kw, kh)
+        return y + kh + int(Inches(0.14))
+
+    def _ov_kpi_card(self, slide, kpi, x, y, w, h) -> None:
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                      Emu(x), Emu(y), Emu(w), Emu(h))
+        card.adjustments[0] = 0.14
+        self._fill_solid(card, self.palette.card_bg)
+        card.line.color.rgb = self._rgb("D7DCE3")
+        card.line.width = Pt(0.75)
+        self._apply_subtle_shadow(card)
+        num_w = int(w * 0.32)
+        self._add_text(
+            slide, str(kpi.value), left=Emu(x + int(Inches(0.08))), top=Emu(y),
+            width=Emu(num_w), height=Emu(h),
+            font=self.style.typography.heading_font, size=18, bold=True,
+            on=self.palette.card_bg, role="strong",
+            align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
+        )
+        self._add_text(
+            slide, kpi.label, left=Emu(x + num_w), top=Emu(y),
+            width=Emu(w - num_w - int(Inches(0.26))), height=Emu(h),
+            font=self.style.typography.body_font, size=8,
+            on=self.palette.card_bg, role="muted",
+            anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
+        )
+        # иконка в правом верхнем углу
+        isz = int(Inches(0.18))
+        ix = x + w - isz - int(Inches(0.09))
+        iy = y + int(Inches(0.09))
+        ink = self._ink(self.palette.card_bg, role="muted", size_pt=10)
+        if kpi.icon_hint:
+            self._draw_icon(slide, kpi.icon_hint, Emu(ix), Emu(iy), Emu(isz), ink)
+
+    def _ov_sources(self, slide, ov, y: int) -> int:
+        blocks = ov.source_blocks[:2]
+        if not blocks:
+            return y
+        col_split = MARGIN_X + int(Inches(7.45))
+        cols = [
+            (MARGIN_X, MARGIN_X + int(Inches(7.15))),
+            (col_split, int(self._OV_RIGHT)),
+        ]
+        y_end = y
+        for bi, blk in enumerate(blocks[:2]):
+            cx0, cx1 = cols[bi] if bi < len(cols) else cols[-1]
+            self._add_text(
+                slide, blk.title + ":", left=Emu(cx0), top=Emu(y),
+                width=Emu(cx1 - cx0), height=Inches(0.26),
+                font=self.style.typography.heading_font, size=10.5, bold=True,
+                color=C.to_hex(self._accent_ink_on_bg(), with_hash=False),
+            )
+            py = y + int(Inches(0.32))
+            px = cx0
+            line_h = int(Inches(0.37))
+            for tag in blk.tags:
+                px, py = self._ov_pill(slide, tag, px, py, cx0, cx1, line_h)
+            y_end = max(y_end, py + line_h)
+        return y_end + int(Inches(0.08))
+
+    def _accent_ink_on_bg(self) -> str:
+        """Акцент, читаемый на фоне слайда (для подзаголовков секций)."""
+        stops = self._gradient_stops()
+        acc = self.palette.accent
+        if C.worst_contrast_over_gradient(acc, stops) >= C.AA_LARGE:
+            return acc
+        return self._text_on_background()
+
+    def _ov_pill(self, slide, text, x, y, col_left, col_right, line_h):
+        char_w = int(Inches(0.066))
+        pad = int(Inches(0.34))
+        w = min(len(text) * char_w + pad, col_right - col_left)
+        if x + w > col_right and x > col_left:
+            x = col_left
+            y += line_h
+        pill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                      Emu(x), Emu(y), Emu(w), Emu(int(Inches(0.30))))
+        pill.adjustments[0] = 0.5
+        self._fill_solid(pill, "FFFFFF")
+        pill.line.color.rgb = self._rgb("D7DCE3")
+        pill.line.width = Pt(0.75)
+        self._add_text(
+            slide, text, left=Emu(x), top=Emu(y),
+            width=Emu(w), height=Emu(int(Inches(0.30))),
+            font=self.style.typography.body_font, size=8.5,
+            on="FFFFFF", role="strong",
+            align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
+        )
+        return x + w + int(Inches(0.10)), y
+
+    def _ov_columns_header(self, slide, y: int) -> int:
+        # правые подписи колонок над группами
+        self._add_text(
+            slide, "Динамика\nк прошлой неделе", left=Emu(int(Inches(9.7))), top=Emu(y),
+            width=Inches(1.6), height=Inches(0.4),
+            font=self.style.typography.body_font, size=8,
+            color=self._muted_on_background(), align=PP_ALIGN.CENTER, line_spacing=0.95,
+        )
+        self._add_text(
+            slide, "Статус", left=Emu(int(Inches(11.5))), top=Emu(y),
+            width=Inches(1.2), height=Inches(0.4),
+            font=self.style.typography.body_font, size=8,
+            color=self._muted_on_background(), align=PP_ALIGN.CENTER,
+        )
+        return y + int(Inches(0.34))
+
+    def _ov_group(self, slide, g, y: int, start_num: int):
+        bar = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                     MARGIN_X, Emu(y),
+                                     int(self._OV_RIGHT) - MARGIN_X, Inches(0.34))
+        bar.adjustments[0] = 0.35
+        self._fill_solid(bar, self._PEACH)
+        bar.line.fill.background()
+        self._add_text(
+            slide, g.name, left=MARGIN_X + int(Inches(0.2)), top=Emu(y),
+            width=Inches(8.3), height=Inches(0.34),
+            font=self.style.typography.heading_font, size=11, bold=True,
+            on=self._PEACH, role="strong", anchor=MSO_ANCHOR.MIDDLE,
+        )
+        # метки колонок внутри плашки (правая часть)
+        lbl = self._ink(self._PEACH, role="muted", size_pt=8)
+        self._add_text(
+            slide, "Динамика к прошлой неделе", left=Emu(int(Inches(9.55))), top=Emu(y),
+            width=Inches(1.85), height=Inches(0.34),
+            font=self.style.typography.body_font, size=7.5, color=lbl,
+            align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE, line_spacing=0.95,
+        )
+        self._add_text(
+            slide, "Статус", left=Emu(int(Inches(11.5))), top=Emu(y),
+            width=Inches(1.2), height=Inches(0.34),
+            font=self.style.typography.body_font, size=7.5, color=lbl,
+            align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
+        )
+        y += int(Inches(0.34)) + int(Inches(0.05))
+        n = start_num
+        for t in g.topics:
+            y = self._ov_topic_row(slide, t, n, y)
+            n += 1
+        return y + int(Inches(0.04)), n
+
+    def _ov_topic_row(self, slide, t, idx, y: int) -> int:
+        x_title = MARGIN_X + int(Inches(0.45))
+        title_w = int(Inches(8.7)) - x_title
+        # номер
+        self._add_text(
+            slide, f"{idx:02d}.", left=MARGIN_X + int(Inches(0.05)), top=Emu(y),
+            width=Inches(0.45), height=Inches(0.3),
+            font=self.style.typography.heading_font, size=11, bold=True,
+            color=self._accent_ink_on_bg(), anchor=MSO_ANCHOR.TOP,
+        )
+        # заголовок
+        title_lines = self._wrap_lines(t.title, title_w, 11)
+        title_h = int(Inches(0.26)) * title_lines
+        self._add_text(
+            slide, t.title, left=Emu(x_title), top=Emu(y),
+            width=Emu(title_w), height=Emu(title_h),
+            font=self.style.typography.heading_font, size=11, bold=True,
+            color=self._text_on_background(), anchor=MSO_ANCHOR.TOP, line_spacing=1.0,
+        )
+        # правые метрики (на уровне заголовка)
+        self._ov_metrics(slide, t, y)
+
+        yy = y + title_h + int(Inches(0.02))
+        if t.quote:
+            yy = self._ov_quote(slide, t.quote, x_title, yy)
+        # разделитель
+        line = slide.shapes.add_connector(1, MARGIN_X, Emu(yy + int(Inches(0.06))),
+                                          int(self._OV_RIGHT), Emu(yy + int(Inches(0.06))))
+        line.line.color.rgb = self._rgb("E2E6EC")
+        line.line.width = Pt(0.5)
+        return yy + int(Inches(0.12))
+
+    def _ov_quote(self, slide, quote, x, y) -> int:
+        qw = int(Inches(8.55)) - x
+        lines = self._wrap_lines(quote, qw - int(Inches(0.2)), 9)
+        qh = max(int(Inches(0.28)), int(Inches(0.19)) * lines + int(Inches(0.10)))
+        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x), Emu(y),
+                                     Emu(int(Inches(0.04))), Emu(qh))
+        self._fill_solid(bar, self.palette.accent)
+        bar.line.fill.background()
+        self._add_text(
+            slide, "«" + quote + "»", left=Emu(x + int(Inches(0.16))), top=Emu(y),
+            width=Emu(qw - int(Inches(0.16))), height=Emu(qh),
+            font=self.style.typography.body_font, size=9, italic=True,
+            color=self._muted_on_background(), anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
+        )
+        return y + qh
+
+    def _ov_metrics(self, slide, t, y) -> None:
+        # упоминания
+        self._add_text(
+            slide, f"{t.mentions}", left=Emu(int(Inches(9.4))), top=Emu(y),
+            width=Inches(0.6), height=Inches(0.3),
+            font=self.style.typography.heading_font, size=13, bold=True,
+            color=self._text_on_background(), align=PP_ALIGN.RIGHT,
+        )
+        self._add_text(
+            slide, "упом.", left=Emu(int(Inches(10.0))), top=Emu(y + int(Inches(0.04))),
+            width=Inches(0.5), height=Inches(0.25),
+            font=self.style.typography.body_font, size=8,
+            color=self._muted_on_background(),
+        )
+        # динамика
+        if t.dynamics_pct is not None:
+            up = t.dynamics_pct > 0
+            flat = abs(t.dynamics_pct) < 0.5
+            arrow = "≡" if flat else ("▲" if up else "▼")
+            col = "64748B" if flat else ("E2362D" if up else "0FB880")
+            sign = "+" if up and not flat else ""
+            self._add_text(
+                slide, f"{arrow} {sign}{t.dynamics_pct:.0f}%",
+                left=Emu(int(Inches(10.55))), top=Emu(y),
+                width=Inches(1.0), height=Inches(0.3),
+                font=self.style.typography.heading_font, size=11, bold=True,
+                color=col, align=PP_ALIGN.CENTER,
+            )
+        # статус
+        self._ov_status(slide, t.status, int(Inches(11.55)), y)
+
+    def _ov_status(self, slide, status, x, y) -> None:
+        if not status:
+            return
+        s = str(status).lower()
+        cy = y + int(Inches(0.02))
+        if "бол" in s:  # в списке болей — мульти-цвет звёздочка
+            self._add_text(
+                slide, "✳", left=Emu(x), top=Emu(cy), width=Inches(0.6), height=Inches(0.3),
+                font=self.style.typography.heading_font, size=15, bold=True,
+                color=self.palette.badge, align=PP_ALIGN.CENTER,
+            )
+        elif "анализ" in s or "кандидат" in s:  # на анализе — лупа
+            self._ov_magnifier(slide, x + int(Inches(0.18)), cy)
+        elif "new" in s or "нов" in s:
+            sq = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x + int(Inches(0.05))),
+                                        Emu(cy + int(Inches(0.03))), Inches(0.12), Inches(0.12))
+            self._fill_solid(sq, self.palette.accent); sq.line.fill.background()
+            self._add_text(slide, "new", left=Emu(x + int(Inches(0.22))), top=Emu(cy),
+                           width=Inches(0.5), height=Inches(0.22),
+                           font=self.style.typography.body_font, size=8,
+                           color=self._text_on_background())
+        else:  # дата/текст
+            self._add_text(
+                slide, str(status), left=Emu(x - int(Inches(0.2))), top=Emu(cy),
+                width=Inches(1.0), height=Inches(0.26),
+                font=self.style.typography.body_font, size=9,
+                color=self._muted_on_background(), align=PP_ALIGN.CENTER,
+            )
+
+    def _ov_magnifier(self, slide, x, y) -> None:
+        col = self._ink(self.palette.gradient_start, role="strong", size_pt=12)
+        r = int(Inches(0.16))
+        circ = slide.shapes.add_shape(MSO_SHAPE.OVAL, Emu(x), Emu(y), Emu(r), Emu(r))
+        circ.fill.background()
+        circ.line.color.rgb = self._rgb(col)
+        circ.line.width = Pt(1.6)
+        handle = slide.shapes.add_connector(
+            1, Emu(x + r - int(Inches(0.02))), Emu(y + r - int(Inches(0.02))),
+            Emu(x + r + int(Inches(0.08))), Emu(y + r + int(Inches(0.08))))
+        handle.line.color.rgb = self._rgb(col)
+        handle.line.width = Pt(2.0)
+
+    def _ov_legend(self, slide) -> None:
+        y = int(SLIDE_HEIGHT) - int(Inches(0.5))
+        muted = self._muted_on_background()
+        parts = [
+            ("✳ ", self.palette.badge, "в списке болей    "),
+            ("⌕ ", muted, "на анализе (кандидат в боль)    "),
+            ("▲▼≡ ", muted, "рост/сокращение/стабильность сигналов к прошлой неделе    "),
+            ("■ ", self.palette.accent, "new — новая тема"),
+        ]
+        x = MARGIN_X
+        for glyph, gcol, txt in parts:
+            self._add_text(slide, glyph, left=Emu(x), top=Emu(y), width=Inches(0.4),
+                           height=Inches(0.25), font=self.style.typography.body_font,
+                           size=9, bold=True, color=gcol)
+            x += int(Inches(0.34))
+            w = int(Inches(0.062) * len(txt) + Inches(0.1))
+            self._add_text(slide, txt, left=Emu(x), top=Emu(y), width=Emu(w),
+                           height=Inches(0.25), font=self.style.typography.body_font,
+                           size=9, color=muted)
+            x += w
+
+    def _wrap_lines(self, text: str, width_emu: int, size_pt: float) -> int:
+        """Грубая оценка числа строк для текста заданной ширины."""
+        char_w = Inches(0.0095) * size_pt
+        per_line = max(1, int(width_emu / char_w))
+        return max(1, -(-len(text) // per_line))
 
     def _finalize_unique_ids(self) -> None:
         """Делает все id фигур уникальными внутри каждого слайда.
