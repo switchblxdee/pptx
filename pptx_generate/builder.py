@@ -257,7 +257,7 @@ class DigestBuilder:
     # НОВЫЙ РЕЖИМ: плотный слайд-обзор
     # ======================================================================= #
 
-    _OV_BOTTOM = Inches(7.02)     # нижняя граница контента (над легендой)
+    _OV_BOTTOM = Inches(6.9)      # нижняя граница контента (над легендой)
     _OV_RIGHT = SLIDE_WIDTH - MARGIN_X
     _PEACH = "F4C99A"             # плашка-заголовок группы (тёплый бренд-тон)
 
@@ -269,15 +269,28 @@ class DigestBuilder:
         y = self._ov_sources(slide, ov, y)
 
         num = 1
-        for gi, g in enumerate(ov.groups):
-            need = int(Inches(0.42)) + int(Inches(0.86)) * max(1, len(g.topics))
-            if gi > 0 and y + need > int(self._OV_BOTTOM):
+        for g in ov.groups:
+            first_h = self._ov_topic_height(g.topics[0]) if g.topics else int(Inches(0.5))
+            # плашка группы + хотя бы одна тема должны влезать
+            if y + int(Inches(0.39)) + first_h > int(self._OV_BOTTOM):
                 self._ov_legend(slide)
-                slide = self._new_slide(cover=False)
-                self._render_meta_header(slide)
-                y = self._ov_header(slide, ov, continued=True)
-            y, num = self._ov_group(slide, g, y, num)
+                slide, y = self._ov_new_page(ov)
+            y = self._ov_group_header(slide, g, y)
+            for t in g.topics:
+                th = self._ov_topic_height(t)
+                if y + th > int(self._OV_BOTTOM):
+                    self._ov_legend(slide)
+                    slide, y = self._ov_new_page(ov)
+                    y = self._ov_group_header(slide, g, y, cont=True)
+                y = self._ov_topic_row(slide, t, num, y)
+                num += 1
         self._ov_legend(slide)
+
+    def _ov_new_page(self, ov):
+        slide = self._new_slide(cover=False)
+        self._render_meta_header(slide)
+        y = self._ov_header(slide, ov, continued=True)
+        return slide, y
 
     def _ov_header(self, slide, ov, continued: bool = False) -> int:
         title = ov.title + ("  (продолжение)" if continued else "")
@@ -416,20 +429,20 @@ class DigestBuilder:
         )
         return y + int(Inches(0.34))
 
-    def _ov_group(self, slide, g, y: int, start_num: int):
+    def _ov_group_header(self, slide, g, y: int, cont: bool = False) -> int:
         bar = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                      MARGIN_X, Emu(y),
                                      int(self._OV_RIGHT) - MARGIN_X, Inches(0.34))
         bar.adjustments[0] = 0.35
         self._fill_solid(bar, self._PEACH)
         bar.line.fill.background()
+        name = g.name + ("  (прод.)" if cont else "")
         self._add_text(
-            slide, g.name, left=MARGIN_X + int(Inches(0.2)), top=Emu(y),
+            slide, name, left=MARGIN_X + int(Inches(0.2)), top=Emu(y),
             width=Inches(8.3), height=Inches(0.34),
             font=self.style.typography.heading_font, size=11, bold=True,
             on=self._PEACH, role="strong", anchor=MSO_ANCHOR.MIDDLE,
         )
-        # метки колонок внутри плашки (правая часть)
         lbl = self._ink(self._PEACH, role="muted", size_pt=8)
         self._add_text(
             slide, "Динамика к прошлой неделе", left=Emu(int(Inches(9.55))), top=Emu(y),
@@ -443,12 +456,21 @@ class DigestBuilder:
             font=self.style.typography.body_font, size=7.5, color=lbl,
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
         )
-        y += int(Inches(0.34)) + int(Inches(0.05))
-        n = start_num
-        for t in g.topics:
-            y = self._ov_topic_row(slide, t, n, y)
-            n += 1
-        return y + int(Inches(0.04)), n
+        return y + int(Inches(0.34)) + int(Inches(0.05))
+
+    def _ov_quote_height(self, quote) -> int:
+        qw = int(Inches(8.55)) - (MARGIN_X + int(Inches(0.45)))
+        lines = self._wrap_lines(quote, qw - int(Inches(0.2)), 9)
+        return max(int(Inches(0.28)), int(Inches(0.19)) * lines + int(Inches(0.10)))
+
+    def _ov_topic_height(self, t) -> int:
+        x_title = MARGIN_X + int(Inches(0.45))
+        title_w = int(Inches(8.7)) - x_title
+        title_lines = self._wrap_lines(t.title, title_w, 11)
+        h = int(Inches(0.26)) * title_lines + int(Inches(0.02))
+        if getattr(t, "quote", None):
+            h += self._ov_quote_height(t.quote)
+        return h + int(Inches(0.18))  # разделитель + нижний зазор
 
     def _ov_topic_row(self, slide, t, idx, y: int) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
@@ -484,8 +506,7 @@ class DigestBuilder:
 
     def _ov_quote(self, slide, quote, x, y) -> int:
         qw = int(Inches(8.55)) - x
-        lines = self._wrap_lines(quote, qw - int(Inches(0.2)), 9)
-        qh = max(int(Inches(0.28)), int(Inches(0.19)) * lines + int(Inches(0.10)))
+        qh = self._ov_quote_height(quote)
         bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x), Emu(y),
                                      Emu(int(Inches(0.04))), Emu(qh))
         self._fill_solid(bar, self.palette.accent)

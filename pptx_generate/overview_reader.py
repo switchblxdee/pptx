@@ -50,6 +50,24 @@ def _norm(s) -> str:
     return str(s).strip().lower().replace("ё", "е")
 
 
+def _parse_num(raw) -> Optional[float]:
+    """Число из ячейки: поддержка '22', '0,22', '-45%', ' 12 '. Иначе None."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return None if pd.isna(raw) else float(raw)
+    s = str(raw).strip().replace("%", "").replace("\u00a0", "").replace(" ", "")
+    if not s:
+        return None
+    s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def _find_col(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
     cols = {c: _norm(c) for c in df.columns}
     for kw in keywords:
@@ -184,24 +202,34 @@ def read_overview(
         report.update(dyn_key=dk, dyn_product=dprod, dyn_current=dcur,
                       dyn_previous=dprev, dyn_pct=dp, _dyn_columns=list(dd.columns))
         if dk:
+            raw_pcts: Dict[str, float] = {}   # ключ -> сырое число из колонки «динамика»
+            counts: Dict[str, Tuple[float, float]] = {}
             for _, row in dd.iterrows():
                 key = _norm(row[dk])
                 if not key:
                     continue
                 if dprod and pd.notna(row[dprod]):
                     dyn_product[key] = str(row[dprod]).strip()
-                # % считаем из счётчиков, если есть; иначе берём колонку «динамика»
-                pct = None
+                if dp is not None:
+                    v = _parse_num(row[dp])
+                    if v is not None:
+                        raw_pcts[key] = v
                 if dcur and dprev:
                     cur = pd.to_numeric(row[dcur], errors="coerce")
                     prev = pd.to_numeric(row[dprev], errors="coerce")
-                    if pd.notna(cur) and pd.notna(prev) and prev != 0:
+                    if pd.notna(cur) and pd.notna(prev):
+                        counts[key] = (float(cur), float(prev))
+            # Доли (0.22) или проценты (22)? Решаем по всей колонке разом.
+            vals = list(raw_pcts.values())
+            as_fraction = bool(vals) and max(abs(v) for v in vals) <= 1.5
+            for key in set(list(raw_pcts) + list(counts)):
+                pct = None
+                if key in raw_pcts:                       # приоритет — готовая колонка
+                    pct = raw_pcts[key] * 100.0 if as_fraction else raw_pcts[key]
+                elif key in counts:                       # запасной — счёт из недель
+                    cur, prev = counts[key]
+                    if prev != 0:
                         pct = (cur - prev) / prev * 100.0
-                if pct is None and dp:
-                    raw = pd.to_numeric(row[dp], errors="coerce")
-                    if pd.notna(raw):
-                        # доля (0.22) -> проценты; уже проценты оставляем
-                        pct = float(raw) * 100.0 if abs(raw) <= 1 else float(raw)
                 if pct is not None:
                     dyn_pct[key] = float(pct)
 
@@ -258,6 +286,18 @@ def read_overview(
         title=title, subtitle=subtitle, kpis=kpis,
         source_blocks=source_blocks, groups=groups,
     )
+    # Прозрачность: что РЕАЛЬНО прочитано из данных (для проверки без файла)
+    report["_rows_read"] = int(len(df))
+    report["_sources_extracted"] = sorted(
+        {str(s).strip() for s in df[c_src].dropna()} if c_src else set()
+    )
+    report["_groups_extracted"] = [
+        (g.name, [(t.title, t.mentions, t.dynamics_pct) for t in g.topics])
+        for g in groups
+    ]
+    report["_dyn_matched"] = sum(
+        1 for g in groups for t in g.topics if t.dynamics_pct is not None
+    )
     logger.info("Overview-маппинг: %s", {k: v for k, v in report.items()
                                          if not k.startswith("_")})
     return overview, report
@@ -286,4 +326,27 @@ def format_report(report: Dict) -> str:
         col = report.get(r)
         mark = "✓" if col else "— НЕ НАЙДЕНО"
         lines.append(f"    {human[r]:32s}: {col or ''} {mark}")
+
+    # что РЕАЛЬНО прочитано из данных — для проверки, что ничего не выдумано
+    if "_rows_read" in report:
+        lines.append(f"  прочитано строк (лист исх): {report['_rows_read']}")
+    srcs = report.get("_sources_extracted")
+    if srcs is not None:
+        lines.append(f"  источники из данных ({len(srcs)}):")
+        for s in srcs:
+            lines.append(f"    • {s}")
+    groups = report.get("_groups_extracted")
+    if groups:
+        matched = report.get("_dyn_matched")
+        suffix = f" (динамика подтянулась к {matched} темам)" if matched is not None else ""
+        lines.append("  группы и темы из данных" + suffix + ":")
+        for gname, topics in groups:
+            lines.append(f"    ▸ {gname}")
+            for item in topics:
+                if isinstance(item, tuple):
+                    title, ment, pct = item
+                    p = "—" if pct is None else f"{pct:+.0f}%"
+                    lines.append(f"        – {title}  [{ment} упом., динамика {p}]")
+                else:
+                    lines.append(f"        – {item}")
     return "\n".join(lines)
