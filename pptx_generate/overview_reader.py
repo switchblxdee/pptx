@@ -134,11 +134,18 @@ def read_overview(
     def _quote(sub) -> Optional[str]:
         if not c_text:
             return None
-        vals = [str(v).strip() for v in sub[c_text].dropna().tolist() if str(v).strip()]
-        if not vals:
+        # схлопываем переносы/пробелы (в данных — целые сообщения с авторами/датами)
+        cands = []
+        for v in sub[c_text].dropna():
+            s = " ".join(str(v).split())
+            if s:
+                cands.append(s)
+        if not cands:
             return None
-        vals.sort(key=lambda s: (-(len(s) <= 300), -len(s)))
-        return vals[0][:380]
+        # берём самое содержательное сообщение и обрезаем до сниппета
+        cands.sort(key=len, reverse=True)
+        q = cands[0]
+        return (q[:150].rstrip() + "…") if len(q) > 150 else q
 
     def _status(sub) -> Optional[str]:
         if not c_status:
