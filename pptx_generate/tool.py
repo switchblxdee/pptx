@@ -316,7 +316,7 @@ class GenerateDigestTool(BaseTool):
         Стиль — бренд SberF1 по умолчанию (если тема не задана явно).
         """
         from datetime import date
-        from .schemas import DigestMeta, CoverSlide
+        from .schemas import DigestMeta, CoverSlide, KPICard
         from .overview_reader import read_overview, format_report
 
         logger.info("Overview-режим. Читаю %s", xlsx_path)
@@ -340,7 +340,11 @@ class GenerateDigestTool(BaseTool):
                 period=period or "",
                 issue_number=issue_number or "№ — / еженедельный",
             ),
-            cover=CoverSlide(title="Голос IT", subtitle=""),
+            cover=CoverSlide(
+                title="Голос IT", subtitle="—",
+                source_tags=["—"],
+                kpis=[KPICard(value="0", label="—"), KPICard(value="0", label="—")],
+            ),
             topics=[],
             overview=overview,
         )

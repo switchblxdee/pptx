@@ -205,12 +205,12 @@ def read_overview(
             for block, sub in df.groupby(c_block, sort=False):
                 tags = sorted({str(s).strip() for s in sub[c_src].dropna() if str(s).strip()})
                 if tags:
-                    source_blocks.append(SourceBlock(title=str(block), tags=tags))
+                    source_blocks.append(SourceBlock(title=str(block)[:40], tags=tags[:40]))
             source_blocks.sort(key=lambda b: -len(b.tags))
             source_blocks = source_blocks[:2]
         else:
             tags = sorted({str(s).strip() for s in df[c_src].dropna() if str(s).strip()})
-            source_blocks = [SourceBlock(title="Источники", tags=tags)]
+            source_blocks = [SourceBlock(title="Источники", tags=tags[:40])]
 
     # ---- группировка тем по продукту (из «динамика», иначе L1, иначе «Прочее») ----
     group_topics: Dict[str, List[Tuple[str, dict]]] = {}
@@ -227,12 +227,12 @@ def read_overview(
             if facts["is_new"]:
                 new_count += 1
             ov_topics.append(OverviewTopic(
-                title=l2, quote=facts["quote"], mentions=facts["mentions"],
+                title=str(l2)[:160], quote=facts["quote"], mentions=facts["mentions"],
                 dynamics_pct=dyn_pct.get(_norm(l2)),
                 status=("new" if facts["is_new"] and not facts["status"] else facts["status"]),
             ))
         gtotal = sum(t.mentions for t in ov_topics)
-        groups.append((gtotal, ProductGroup(name=str(prod), topics=ov_topics)))
+        groups.append((gtotal, ProductGroup(name=str(prod)[:80], topics=ov_topics)))
     groups.sort(key=lambda x: -x[0])
     groups = [g for _, g in groups[:max_groups]]
 
