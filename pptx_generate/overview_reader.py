@@ -42,8 +42,8 @@ HINTS = {
 DYN_HINTS = {
     "key": ["тема", "кластер 2", "кластер2", "2 уровн", "название", "l2", "name"],
     "product": ["продукт", "объект", "группа", "product"],
-    "current": ["текущ", "current", "этой недел", "за неделю"],
-    "previous": ["прошл", "previous", "предыдущ"],
+    "current": ["текущ", "current", "этой недел", "за неделю", "тек недел", "тек."],
+    "previous": ["прошл", "previous", "предыдущ", "пред недел", "пред."],
     "pct": ["динамик", "%", "процент", "изменени", "к прошл", "delta", "дельта"],
 }
 
@@ -113,6 +113,23 @@ def _similarity(a, b) -> float:
     return base
 
 
+def _read_sheet(xls, sheet: str, header_keywords: List[str]) -> "pd.DataFrame":
+    """Читает лист, САМ находя строку заголовков (над ней могут быть пустые
+    строки), и нормализует имена колонок (схлопывает переносы/пробелы)."""
+    raw = xls.parse(sheet, header=None)
+    header_row = 0
+    for i in range(min(10, len(raw))):
+        joined = " ".join(_norm(v) for v in raw.iloc[i].tolist() if pd.notna(v))
+        if sum(1 for kw in header_keywords if kw in joined) >= 2:
+            header_row = i
+            break
+    df = xls.parse(sheet, header=header_row)
+    df.columns = [" ".join(str(c).split()) for c in df.columns]
+    # выкидываем полностью пустые колонки-«Unnamed»
+    df = df.loc[:, [c for c in df.columns if not str(c).lower().startswith("unnamed")]]
+    return df
+
+
 def _pick_quote(series) -> Optional[str]:
     """Самый содержательный комментарий из набора, схлопнутый и обрезанный."""
     cands = []
@@ -171,8 +188,8 @@ def read_overview(
     if src_sheet is None:
         src_sheet = xls.sheet_names[0]
 
-    df = xls.parse(src_sheet)               # лист «исх»
-    df.columns = [str(c) for c in df.columns]
+    df = _read_sheet(xls, src_sheet,
+                     ["источник", "кластер", "текст", "объект", "сигнал", "дата"])
 
     cols: Dict[str, Optional[str]] = {}
     for role, kws in HINTS.items():
@@ -211,8 +228,8 @@ def read_overview(
     # ---- «динамика» = таблица проблем: продукт, тема, текущая, прошлая, % ----
     if not dyn_sheet:
         raise ValueError("Для обзор-слайда нужен лист «динамика» — не нашёл его.")
-    dd = xls.parse(dyn_sheet)
-    dd.columns = [str(c) for c in dd.columns]
+    dd = _read_sheet(xls, dyn_sheet,
+                     ["продукт", "тема", "динамик", "недел", "сигнал", "кол-во"])
     dprod = mapping.get("dyn_product") or _find_col(dd, DYN_HINTS["product"])
     dk = mapping.get("dyn_key") or _find_col(dd, DYN_HINTS["key"])
     dcur = mapping.get("dyn_current") or _find_col(dd, DYN_HINTS["current"])
@@ -243,10 +260,10 @@ def read_overview(
         if not theme:
             continue
         prod = str(row[dprod]).strip() if (dprod and pd.notna(row[dprod])) else "Прочее"
-        cur = pd.to_numeric(row[dcur], errors="coerce") if dcur else None
-        prev = pd.to_numeric(row[dprev], errors="coerce") if dprev else None
-        has_cur = cur is not None and pd.notna(cur)
-        has_prev = prev is not None and pd.notna(prev)
+        cur = _parse_num(row[dcur]) if dcur else None
+        prev = _parse_num(row[dprev]) if dprev else None
+        has_cur = cur is not None
+        has_prev = prev is not None
         pct = None
         if has_cur and has_prev and prev != 0:
             pct = (float(cur) - float(prev)) / float(prev) * 100.0   # знаковый %
@@ -261,7 +278,8 @@ def read_overview(
         if not quote:
             no_comment.append(theme[:60])
         groups_map.setdefault(prod, []).append(dict(
-            title=theme[:160], mentions=int(cur) if has_cur else 0,
+            title=theme[:160], mentions=int(round(cur)) if has_cur else 0,
+            prev=int(round(prev)) if has_prev else None,
             pct=pct, is_new=is_new, quote=quote,
         ))
         n_topics += 1
@@ -320,6 +338,10 @@ def read_overview(
     report["_topics_total"] = n_topics
     report["_dyn_matched"] = sum(1 for g in groups for t in g.topics if t.dynamics_pct is not None)
     report["_no_comment"] = no_comment
+    report["_dyn_sample"] = [
+        (g.name, t.title[:40], t.mentions, t.dynamics_pct)
+        for g in groups[:3] for t in g.topics[:2]
+    ]
     logger.info("Overview-маппинг: %s", {k: v for k, v in report.items()
                                          if not k.startswith("_")})
     return overview, report
