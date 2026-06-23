@@ -302,10 +302,12 @@ def read_overview(
                           status=d.get("status") or ("new" if d["is_new"] else None))
             for d in items[:max_topics_per_group]
         ]
+        gmax = max((t.mentions for t in ov_topics), default=0)
         gtotal = sum(t.mentions for t in ov_topics)
-        groups.append((gtotal, ProductGroup(name=str(prod)[:80], topics=ov_topics)))
-    groups.sort(key=lambda x: -x[0])
-    groups = [g for _, g in groups[:max_groups]]
+        groups.append((gmax, gtotal, ProductGroup(name=str(prod)[:80], topics=ov_topics)))
+    # сначала группы с самой «горячей» темой (макс. упоминаний), затем по сумме
+    groups.sort(key=lambda x: (-x[0], -x[1]))
+    groups = [g for _, _, g in groups[:max_groups]]
 
     # ---- источники из «исх» ----
     source_blocks: List = []
