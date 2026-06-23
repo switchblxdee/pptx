@@ -45,6 +45,7 @@ DYN_HINTS = {
     "current": ["текущ", "current", "этой недел", "за неделю", "тек недел", "тек."],
     "previous": ["прошл", "previous", "предыдущ", "пред недел", "пред."],
     "pct": ["динамик", "%", "процент", "изменени", "к прошл", "delta", "дельта"],
+    "status": ["статус", "status", "состояни"],
 }
 
 
@@ -235,8 +236,10 @@ def read_overview(
     dcur = mapping.get("dyn_current") or _find_col(dd, DYN_HINTS["current"])
     dprev = mapping.get("dyn_previous") or _find_col(dd, DYN_HINTS["previous"])
     dp = mapping.get("dyn_pct") or _find_col(dd, DYN_HINTS["pct"])
+    dstatus = mapping.get("dyn_status") or _find_col(dd, DYN_HINTS["status"])
     report.update(dyn_product=dprod, dyn_key=dk, dyn_current=dcur,
-                  dyn_previous=dprev, dyn_pct=dp, _dyn_columns=list(dd.columns))
+                  dyn_previous=dprev, dyn_pct=dp, dyn_status=dstatus,
+                  _dyn_columns=list(dd.columns))
     if dk is None:
         raise ValueError(
             f"В листе «{dyn_sheet}» не нашёл колонку темы. Колонки: {list(dd.columns)}. "
@@ -272,6 +275,11 @@ def read_overview(
             if v is not None:
                 pct = v * 100.0 if as_fraction else v
         is_new = pct is None and has_cur and not has_prev
+        status_txt = (str(row[dstatus]).strip()[:40]
+                      if (dstatus and pd.notna(row[dstatus]) and str(row[dstatus]).strip())
+                      else None)
+        if status_txt and "нов" in status_txt.lower():
+            is_new = True
         if is_new:
             new_count += 1
         quote = _comment_for(theme)
@@ -281,6 +289,7 @@ def read_overview(
             title=theme[:160], mentions=int(round(cur)) if has_cur else 0,
             prev=int(round(prev)) if has_prev else None,
             pct=pct, is_new=is_new, quote=quote,
+            status=status_txt or ("new" if is_new else None),
         ))
         n_topics += 1
 
@@ -290,7 +299,7 @@ def read_overview(
         ov_topics = [
             OverviewTopic(title=d["title"], quote=d["quote"], mentions=d["mentions"],
                           dynamics_pct=d["pct"],
-                          status=("new" if d["is_new"] else None))
+                          status=d.get("status") or ("new" if d["is_new"] else None))
             for d in items[:max_topics_per_group]
         ]
         gtotal = sum(t.mentions for t in ov_topics)

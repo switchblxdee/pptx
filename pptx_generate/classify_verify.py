@@ -195,7 +195,17 @@ def verify_and_count(
             if tv is not None and str(tv).strip():
                 ws_dyn.cell(row=r, column=ccol, value=int(theme_counts.get(str(tv), _count_for(tv))))
 
-    wb.save(output_path)
+    try:
+        wb.save(output_path)
+        saved_to = output_path
+    except (PermissionError, OSError) as e:
+        # файл, скорее всего, открыт в Excel/R7 — сохраняем копию рядом
+        import os
+        base, ext = os.path.splitext(output_path)
+        saved_to = base + "_verified" + (ext or ".xlsx")
+        wb.save(saved_to)
+        logger.warning("Не удалось записать в %s (%s). Сохранил в %s",
+                       output_path, e, saved_to)
 
     report = {
         "_src_sheet": ish_sheet, "_dyn_sheet": dyn_sheet,
@@ -205,11 +215,11 @@ def verify_and_count(
         "false_count": int(sum(1 for v in verdicts if not v)),
         "per_theme": theme_counts,
         "verdict_col": verdict_col, "count_col": count_col,
-        "output": output_path,
+        "output": saved_to,
     }
     logger.info("Проверка завершена: %s/%s True, тем: %s",
                 report["true_count"], report["rows_checked"], len(theme_counts))
-    return output_path, report
+    return saved_to, report
 
 
 def format_verify_report(report: dict) -> str:

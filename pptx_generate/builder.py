@@ -555,22 +555,28 @@ class DigestBuilder:
             return
         s = str(status).lower()
         cy = y + int(Inches(0.02))
-        if "бол" in s:  # в списке болей — мульти-цвет звёздочка
-            self._add_text(
-                slide, "✳", left=Emu(x), top=Emu(cy), width=Inches(0.6), height=Inches(0.3),
-                font=self.style.typography.heading_font, size=15, bold=True,
-                color=self.palette.badge, align=PP_ALIGN.CENTER,
-            )
+        if "бол" in s:  # в списке болей — фирменная искра (вырезана из шаблона)
+            icon = self._resolve_asset("icons/status_pain.png")
+            if icon:
+                slide.shapes.add_picture(icon, Emu(x + int(Inches(0.08))),
+                                         Emu(cy + int(Inches(0.01))),
+                                         height=Inches(0.26))
+            else:
+                self._add_text(
+                    slide, "✳", left=Emu(x), top=Emu(cy), width=Inches(0.6),
+                    height=Inches(0.3), font=self.style.typography.heading_font,
+                    size=15, bold=True, color="0FB880", align=PP_ALIGN.CENTER,
+                )
         elif "анализ" in s or "кандидат" in s:  # на анализе — лупа
             self._ov_magnifier(slide, x + int(Inches(0.18)), cy)
-        elif "new" in s or "нов" in s:
+        elif "new" in s or "нов" in s:  # новая тема — фиолетовый квадрат + new
             sq = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x + int(Inches(0.05))),
                                         Emu(cy + int(Inches(0.03))), Inches(0.12), Inches(0.12))
-            self._fill_solid(sq, self.palette.accent); sq.line.fill.background()
+            self._fill_solid(sq, self.palette.badge); sq.line.fill.background()
             self._add_text(slide, "new", left=Emu(x + int(Inches(0.22))), top=Emu(cy),
                            width=Inches(0.5), height=Inches(0.22),
                            font=self.style.typography.body_font, size=8,
-                           color=self._text_on_background())
+                           color=self.palette.badge)
         else:  # дата/текст
             self._add_text(
                 slide, str(status), left=Emu(x - int(Inches(0.2))), top=Emu(cy),
@@ -596,16 +602,21 @@ class DigestBuilder:
         y = int(SLIDE_HEIGHT) - int(Inches(0.5))
         muted = self._muted_on_background()
         parts = [
-            ("✳ ", self.palette.badge, "в списке болей    "),
+            ("✳ ", "0FB880", "в списке болей    "),
             ("⌕ ", muted, "на анализе (кандидат в боль)    "),
             ("▲▼≡ ", muted, "рост/сокращение/стабильность сигналов к прошлой неделе    "),
-            ("■ ", self.palette.accent, "new — новая тема"),
+            ("■ ", self.palette.badge, "new — новая тема"),
         ]
         x = MARGIN_X
+        pain_icon = self._resolve_asset("icons/status_pain.png")
         for glyph, gcol, txt in parts:
-            self._add_text(slide, glyph, left=Emu(x), top=Emu(y), width=Inches(0.4),
-                           height=Inches(0.25), font=self.style.typography.body_font,
-                           size=9, bold=True, color=gcol)
+            if glyph.startswith("✳") and pain_icon:
+                slide.shapes.add_picture(pain_icon, Emu(x), Emu(y - int(Inches(0.02))),
+                                         height=Inches(0.22))
+            else:
+                self._add_text(slide, glyph, left=Emu(x), top=Emu(y), width=Inches(0.4),
+                               height=Inches(0.25), font=self.style.typography.body_font,
+                               size=9, bold=True, color=gcol)
             x += int(Inches(0.34))
             w = int(Inches(0.062) * len(txt) + Inches(0.1))
             self._add_text(slide, txt, left=Emu(x), top=Emu(y), width=Emu(w),
