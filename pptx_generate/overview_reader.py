@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -85,6 +86,31 @@ def _dyn_lookup(table: dict, mk: str):
             if k and len(k) >= 10 and (mk in k or k in mk):
                 return v
     return None
+
+
+_STOP = {"и", "в", "во", "на", "по", "с", "со", "для", "к", "из", "о", "об", "при",
+         "не", "от", "до", "за", "the", "a", "of", "in", "to", "при", "что", "как"}
+
+
+def _tokens(s) -> set:
+    """Значимые слова темы (без пунктуации, стоп-слов и коротких токенов)."""
+    return {w for w in _match_key(s).split() if len(w) > 2 and w not in _STOP}
+
+
+def _similarity(a, b) -> float:
+    """Схожесть двух названий тем: пересечение значимых слов + посимвольно."""
+    ta, tb = _tokens(a), _tokens(b)
+    inter = len(ta & tb)
+    if ta and tb:
+        jac = inter / len(ta | tb)
+        overlap = inter / min(len(ta), len(tb))
+    else:
+        jac = overlap = 0.0
+    seq = SequenceMatcher(None, _match_key(a), _match_key(b)).ratio()
+    base = max(jac, 0.85 * overlap, 0.9 * seq)
+    if inter < 2 and seq < 0.7:   # слабое пересечение слов — занижаем
+        base *= 0.5
+    return base
 
 
 def _find_col(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
@@ -211,6 +237,7 @@ def read_overview(
     dyn_pct: Dict[str, float] = {}
     dyn_product: Dict[str, str] = {}
     dyn_new: Dict[str, bool] = {}
+    dyn_entries: List[Tuple[str, str, Optional[str]]] = []  # (тема_ориг, ключ, продукт)
     if dyn_sheet:
         dd = xls.parse(dyn_sheet)
         dd.columns = [str(c) for c in dd.columns]
@@ -228,8 +255,10 @@ def read_overview(
                 key = _match_key(row[dk])
                 if not key:
                     continue
-                if dprod and pd.notna(row[dprod]):
-                    dyn_product[key] = str(row[dprod]).strip()
+                prod_val = str(row[dprod]).strip() if (dprod and pd.notna(row[dprod])) else None
+                if prod_val:
+                    dyn_product[key] = prod_val
+                dyn_entries.append((str(row[dk]).strip(), key, prod_val))
                 if dp is not None:
                     v = _parse_num(row[dp])
                     if v is not None:
@@ -271,22 +300,55 @@ def read_overview(
             tags = sorted({str(s).strip() for s in df[c_src].dropna() if str(s).strip()})
             source_blocks = [SourceBlock(title="Источники", tags=tags[:40])]
 
+    # ---- сопоставление темы из «исх» с темой из «динамика» ----
+    dyn_keys = set(dyn_pct) | set(dyn_new) | set(dyn_product)
+
+    def _lookup_key(l2: str, l1: Optional[str]):
+        """Возвращает (ключ_в_динамике | None, был_ли_нечёткий_матч)."""
+        mk = _match_key(l2)
+        if mk in dyn_keys:
+            return mk, False
+        if len(mk) >= 10:                                  # по вхождению
+            for k in dyn_keys:
+                if len(k) >= 10 and (mk in k or k in mk):
+                    return k, False
+        best_key, best_sc = None, 0.0                      # по схожести
+        for theme, ekey, prod in dyn_entries:
+            sc = _similarity(l2, theme)
+            if l1 and prod:                                # бонус за совпадение продукта
+                pl, pp = _match_key(l1), _match_key(prod)
+                if pl and pp and (pl in pp or pp in pl):
+                    sc += 0.12
+            if sc > best_sc:
+                best_key, best_sc = ekey, sc
+        if best_key is not None and best_sc >= 0.5:
+            return best_key, True
+        return None, False
+
+    resolved: Dict[str, Tuple[Optional[str], bool]] = {
+        l2: _lookup_key(l2, l1_by_l2.get(l2)) for l2 in topics_by_l2
+    }
+
     # ---- группировка тем по продукту (из «динамика», иначе L1, иначе «Прочее») ----
     group_topics: Dict[str, List[Tuple[str, dict]]] = {}
     for l2, facts in topics_by_l2.items():
-        prod = _dyn_lookup(dyn_product, _match_key(l2)) or l1_by_l2.get(l2) or "Прочее"
+        mkey = resolved[l2][0]
+        prod = (dyn_product.get(mkey) if mkey else None) or l1_by_l2.get(l2) or "Прочее"
         group_topics.setdefault(prod, []).append((l2, facts))
 
     groups: List = []
     new_count = 0
     unmatched_dyn: List[str] = []
+    fuzzy_count = 0
     for prod, items in group_topics.items():
         items.sort(key=lambda x: -x[1]["mentions"])
         ov_topics = []
         for l2, facts in items[:max_topics_per_group]:
-            mk = _match_key(l2)
-            pct = _dyn_lookup(dyn_pct, mk)
-            is_new = facts["is_new"] or bool(_dyn_lookup(dyn_new, mk))
+            mkey, fuzzy = resolved[l2]
+            pct = dyn_pct.get(mkey) if mkey else None
+            is_new = facts["is_new"] or (bool(dyn_new.get(mkey)) if mkey else False)
+            if fuzzy and pct is not None:
+                fuzzy_count += 1
             if is_new:
                 new_count += 1
             if pct is None and not is_new:
@@ -329,6 +391,7 @@ def read_overview(
         1 for g in groups for t in g.topics if t.dynamics_pct is not None
     )
     report["_dyn_unmatched"] = unmatched_dyn
+    report["_dyn_fuzzy"] = fuzzy_count
     logger.info("Overview-маппинг: %s", {k: v for k, v in report.items()
                                          if not k.startswith("_")})
     return overview, report
@@ -369,7 +432,11 @@ def format_report(report: Dict) -> str:
     groups = report.get("_groups_extracted")
     if groups:
         matched = report.get("_dyn_matched")
-        suffix = f" (динамика подтянулась к {matched} темам)" if matched is not None else ""
+        fuzzy = report.get("_dyn_fuzzy") or 0
+        suffix = ""
+        if matched is not None:
+            suffix = f" (динамика подтянулась к {matched} темам"
+            suffix += f", из них по схожести: {fuzzy})" if fuzzy else ")"
         lines.append("  группы и темы из данных" + suffix + ":")
         for gname, topics in groups:
             lines.append(f"    ▸ {gname}")
