@@ -113,6 +113,20 @@ def _similarity(a, b) -> float:
     return base
 
 
+def _pick_quote(series) -> Optional[str]:
+    """Самый содержательный комментарий из набора, схлопнутый и обрезанный."""
+    cands = []
+    for v in series.dropna():
+        s = " ".join(str(v).split())
+        if s:
+            cands.append(s)
+    if not cands:
+        return None
+    cands.sort(key=len, reverse=True)
+    q = cands[0]
+    return (q[:150].rstrip() + "…") if len(q) > 150 else q
+
+
 def _find_col(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
     cols = {c: _norm(c) for c in df.columns}
     for kw in keywords:
@@ -157,136 +171,116 @@ def read_overview(
     if src_sheet is None:
         src_sheet = xls.sheet_names[0]
 
-    df = xls.parse(src_sheet)
+    df = xls.parse(src_sheet)               # лист «исх»
     df.columns = [str(c) for c in df.columns]
 
-    # привязка колонок
     cols: Dict[str, Optional[str]] = {}
     for role, kws in HINTS.items():
         cols[role] = mapping.get(role) or _find_col(df, kws)
-
     report = {**cols, "_src_sheet": src_sheet, "_dyn_sheet": dyn_sheet,
               "_src_columns": list(df.columns)}
 
-    # обязательные роли
-    c_l1, c_l2 = cols["cluster_l1"], cols["cluster_l2"]
-    if c_l2 is None:
+    c_l2 = cols["cluster_l2"]               # тема в «исх» — нужна ТОЛЬКО для комментариев
+    c_src, c_block, c_text = cols["source"], cols["source_block"], cols["text"]
+
+    # ---- индекс комментариев из «исх»: тема -> представительный комментарий ----
+    comment_index: Dict[str, Tuple[str, str]] = {}   # ключ -> (тема_ориг, цитата)
+    if c_l2 and c_text:
+        for l2, sub in df.dropna(subset=[c_l2]).groupby(c_l2, sort=False):
+            q = _pick_quote(sub[c_text])
+            if q:
+                comment_index[_match_key(l2)] = (str(l2), q)
+
+    def _comment_for(theme: str) -> Optional[str]:
+        if not comment_index:
+            return None
+        mk = _match_key(theme)
+        if mk in comment_index:
+            return comment_index[mk][1]
+        if len(mk) >= 10:
+            for k, (o, q) in comment_index.items():
+                if len(k) >= 10 and (mk in k or k in mk):
+                    return q
+        best_sc, best_q = 0.0, None
+        for k, (o, q) in comment_index.items():
+            sc = _similarity(theme, o)
+            if sc > best_sc:
+                best_sc, best_q = sc, q
+        return best_q if best_sc >= 0.5 else None
+
+    # ---- «динамика» = таблица проблем: продукт, тема, текущая, прошлая, % ----
+    if not dyn_sheet:
+        raise ValueError("Для обзор-слайда нужен лист «динамика» — не нашёл его.")
+    dd = xls.parse(dyn_sheet)
+    dd.columns = [str(c) for c in dd.columns]
+    dprod = mapping.get("dyn_product") or _find_col(dd, DYN_HINTS["product"])
+    dk = mapping.get("dyn_key") or _find_col(dd, DYN_HINTS["key"])
+    dcur = mapping.get("dyn_current") or _find_col(dd, DYN_HINTS["current"])
+    dprev = mapping.get("dyn_previous") or _find_col(dd, DYN_HINTS["previous"])
+    dp = mapping.get("dyn_pct") or _find_col(dd, DYN_HINTS["pct"])
+    report.update(dyn_product=dprod, dyn_key=dk, dyn_current=dcur,
+                  dyn_previous=dprev, dyn_pct=dp, _dyn_columns=list(dd.columns))
+    if dk is None:
         raise ValueError(
-            "Не нашёл колонку темы (кластер 2 уровня). Колонки листа: "
-            f"{list(df.columns)}. Задай вручную mapping={{'cluster_l2': '<имя>'}}."
+            f"В листе «{dyn_sheet}» не нашёл колонку темы. Колонки: {list(dd.columns)}. "
+            "Задай mapping={'dyn_key': '<имя>'}."
         )
-    if c_l1 is None:
-        c_l1 = c_l2  # нет группировки — каждая тема сама себе группа
+    # доли (0.22) или проценты (22) в колонке «динамика» — решаем по всей колонке
+    rawvals = []
+    if dp is not None:
+        for _, row in dd.iterrows():
+            v = _parse_num(row[dp])
+            if v is not None:
+                rawvals.append(v)
+    as_fraction = bool(rawvals) and max(abs(v) for v in rawvals) <= 1.5
 
-    c_src, c_block = cols["source"], cols["source_block"]
-    c_text, c_status = cols["text"], cols["status"]
-    c_count, c_new = cols["count"], cols["is_new"]
+    groups_map: Dict[str, List[dict]] = {}
+    n_topics = 0
+    new_count = 0
+    no_comment: List[str] = []
+    for _, row in dd.iterrows():
+        theme = str(row[dk]).strip() if pd.notna(row[dk]) else ""
+        if not theme:
+            continue
+        prod = str(row[dprod]).strip() if (dprod and pd.notna(row[dprod])) else "Прочее"
+        cur = pd.to_numeric(row[dcur], errors="coerce") if dcur else None
+        prev = pd.to_numeric(row[dprev], errors="coerce") if dprev else None
+        has_cur = cur is not None and pd.notna(cur)
+        has_prev = prev is not None and pd.notna(prev)
+        pct = None
+        if has_cur and has_prev and prev != 0:
+            pct = (float(cur) - float(prev)) / float(prev) * 100.0   # знаковый %
+        elif dp is not None:
+            v = _parse_num(row[dp])
+            if v is not None:
+                pct = v * 100.0 if as_fraction else v
+        is_new = pct is None and has_cur and not has_prev
+        if is_new:
+            new_count += 1
+        quote = _comment_for(theme)
+        if not quote:
+            no_comment.append(theme[:60])
+        groups_map.setdefault(prod, []).append(dict(
+            title=theme[:160], mentions=int(cur) if has_cur else 0,
+            pct=pct, is_new=is_new, quote=quote,
+        ))
+        n_topics += 1
 
-    df = df.dropna(subset=[c_l2])
-    l1_fallback = c_l1 if c_l1 != c_l2 else None  # напр. «Объект сигнала»
+    groups: List = []
+    for prod, items in groups_map.items():
+        items.sort(key=lambda d: -d["mentions"])
+        ov_topics = [
+            OverviewTopic(title=d["title"], quote=d["quote"], mentions=d["mentions"],
+                          dynamics_pct=d["pct"],
+                          status=("new" if d["is_new"] else None))
+            for d in items[:max_topics_per_group]
+        ]
+        gtotal = sum(t.mentions for t in ov_topics)
+        groups.append((gtotal, ProductGroup(name=str(prod)[:80], topics=ov_topics)))
+    groups.sort(key=lambda x: -x[0])
+    groups = [g for _, g in groups[:max_groups]]
 
-    # ---- агрегаты по теме (кластер 2 уровня) ----
-    def _mentions(sub) -> int:
-        if c_count and c_count in sub:
-            try:
-                return int(pd.to_numeric(sub[c_count], errors="coerce").fillna(0).sum())
-            except Exception:
-                pass
-        return len(sub)
-
-    def _quote(sub) -> Optional[str]:
-        if not c_text:
-            return None
-        # схлопываем переносы/пробелы (в данных — целые сообщения с авторами/датами)
-        cands = []
-        for v in sub[c_text].dropna():
-            s = " ".join(str(v).split())
-            if s:
-                cands.append(s)
-        if not cands:
-            return None
-        # берём самое содержательное сообщение и обрезаем до сниппета
-        cands.sort(key=len, reverse=True)
-        q = cands[0]
-        return (q[:150].rstrip() + "…") if len(q) > 150 else q
-
-    def _status(sub) -> Optional[str]:
-        if not c_status:
-            return None
-        vals = [str(v).strip() for v in sub[c_status].dropna().tolist() if str(v).strip()]
-        return vals[0] if vals else None
-
-    def _is_new(sub) -> bool:
-        if c_new and c_new in sub:
-            return bool(pd.to_numeric(sub[c_new], errors="coerce").fillna(0).sum() > 0)
-        st = (_status(sub) or "").lower()
-        return "нов" in st or "new" in st
-
-    topics_by_l2: Dict[str, dict] = {}
-    l1_by_l2: Dict[str, Optional[str]] = {}
-    for l2, sub in df.groupby(c_l2, sort=False):
-        topics_by_l2[str(l2)] = dict(
-            mentions=_mentions(sub), quote=_quote(sub),
-            status=_status(sub), is_new=_is_new(sub),
-        )
-        if l1_fallback:
-            v = sub[l1_fallback].dropna()
-            l1_by_l2[str(l2)] = str(v.iloc[0]) if len(v) else None
-
-    # ---- лист «динамика»: тема -> продукт(=группа) и % ----
-    dyn_pct: Dict[str, float] = {}
-    dyn_product: Dict[str, str] = {}
-    dyn_new: Dict[str, bool] = {}
-    dyn_entries: List[Tuple[str, str, Optional[str]]] = []  # (тема_ориг, ключ, продукт)
-    if dyn_sheet:
-        dd = xls.parse(dyn_sheet)
-        dd.columns = [str(c) for c in dd.columns]
-        dk = mapping.get("dyn_key") or _find_col(dd, DYN_HINTS["key"])
-        dprod = mapping.get("dyn_product") or _find_col(dd, DYN_HINTS["product"])
-        dcur = mapping.get("dyn_current") or _find_col(dd, DYN_HINTS["current"])
-        dprev = mapping.get("dyn_previous") or _find_col(dd, DYN_HINTS["previous"])
-        dp = mapping.get("dyn_pct") or _find_col(dd, DYN_HINTS["pct"])
-        report.update(dyn_key=dk, dyn_product=dprod, dyn_current=dcur,
-                      dyn_previous=dprev, dyn_pct=dp, _dyn_columns=list(dd.columns))
-        if dk:
-            raw_pcts: Dict[str, float] = {}   # колонка «динамика» (в этих данных — модуль)
-            counts: Dict[str, Tuple] = {}     # ключ -> (текущая, прошлая)
-            for _, row in dd.iterrows():
-                key = _match_key(row[dk])
-                if not key:
-                    continue
-                prod_val = str(row[dprod]).strip() if (dprod and pd.notna(row[dprod])) else None
-                if prod_val:
-                    dyn_product[key] = prod_val
-                dyn_entries.append((str(row[dk]).strip(), key, prod_val))
-                if dp is not None:
-                    v = _parse_num(row[dp])
-                    if v is not None:
-                        raw_pcts[key] = v
-                cur = pd.to_numeric(row[dcur], errors="coerce") if dcur else None
-                prev = pd.to_numeric(row[dprev], errors="coerce") if dprev else None
-                counts[key] = (cur, prev)
-            # доли (0.22) или проценты (22)? — только для запасной колонки
-            vals = list(raw_pcts.values())
-            as_fraction = bool(vals) and max(abs(v) for v in vals) <= 1.5
-            for key in set(list(raw_pcts) + list(counts)):
-                cur, prev = counts.get(key, (None, None))
-                has_cur = cur is not None and pd.notna(cur)
-                has_prev = prev is not None and pd.notna(prev)
-                pct = None
-                if has_cur and has_prev and prev != 0:
-                    # ЗНАКОВЫЙ % из счётчиков — даёт направление (рост/падение)
-                    pct = (float(cur) - float(prev)) / float(prev) * 100.0
-                elif key in raw_pcts:
-                    # запас: готовая колонка (в этих данных — модуль, без знака)
-                    pct = raw_pcts[key] * 100.0 if as_fraction else raw_pcts[key]
-                if pct is not None:
-                    dyn_pct[key] = float(pct)
-                elif has_cur and not has_prev:
-                    # есть сигналы на этой неделе, но нет прошлой -> новая тема
-                    dyn_new[key] = True
-
-    # ---- источники по блокам ----
+    # ---- источники из «исх» ----
     source_blocks: List = []
     if c_src:
         if c_block:
@@ -300,77 +294,14 @@ def read_overview(
             tags = sorted({str(s).strip() for s in df[c_src].dropna() if str(s).strip()})
             source_blocks = [SourceBlock(title="Источники", tags=tags[:40])]
 
-    # ---- сопоставление темы из «исх» с темой из «динамика» ----
-    dyn_keys = set(dyn_pct) | set(dyn_new) | set(dyn_product)
-
-    def _lookup_key(l2: str, l1: Optional[str]):
-        """Возвращает (ключ_в_динамике | None, был_ли_нечёткий_матч)."""
-        mk = _match_key(l2)
-        if mk in dyn_keys:
-            return mk, False
-        if len(mk) >= 10:                                  # по вхождению
-            for k in dyn_keys:
-                if len(k) >= 10 and (mk in k or k in mk):
-                    return k, False
-        best_key, best_sc = None, 0.0                      # по схожести
-        for theme, ekey, prod in dyn_entries:
-            sc = _similarity(l2, theme)
-            if l1 and prod:                                # бонус за совпадение продукта
-                pl, pp = _match_key(l1), _match_key(prod)
-                if pl and pp and (pl in pp or pp in pl):
-                    sc += 0.12
-            if sc > best_sc:
-                best_key, best_sc = ekey, sc
-        if best_key is not None and best_sc >= 0.5:
-            return best_key, True
-        return None, False
-
-    resolved: Dict[str, Tuple[Optional[str], bool]] = {
-        l2: _lookup_key(l2, l1_by_l2.get(l2)) for l2 in topics_by_l2
-    }
-
-    # ---- группировка тем по продукту (из «динамика», иначе L1, иначе «Прочее») ----
-    group_topics: Dict[str, List[Tuple[str, dict]]] = {}
-    for l2, facts in topics_by_l2.items():
-        mkey = resolved[l2][0]
-        prod = (dyn_product.get(mkey) if mkey else None) or l1_by_l2.get(l2) or "Прочее"
-        group_topics.setdefault(prod, []).append((l2, facts))
-
-    groups: List = []
-    new_count = 0
-    unmatched_dyn: List[str] = []
-    fuzzy_count = 0
-    for prod, items in group_topics.items():
-        items.sort(key=lambda x: -x[1]["mentions"])
-        ov_topics = []
-        for l2, facts in items[:max_topics_per_group]:
-            mkey, fuzzy = resolved[l2]
-            pct = dyn_pct.get(mkey) if mkey else None
-            is_new = facts["is_new"] or (bool(dyn_new.get(mkey)) if mkey else False)
-            if fuzzy and pct is not None:
-                fuzzy_count += 1
-            if is_new:
-                new_count += 1
-            if pct is None and not is_new:
-                unmatched_dyn.append(str(l2))
-            ov_topics.append(OverviewTopic(
-                title=str(l2)[:160], quote=facts["quote"], mentions=facts["mentions"],
-                dynamics_pct=pct,
-                status=("new" if is_new and not facts["status"] else facts["status"]),
-            ))
-        gtotal = sum(t.mentions for t in ov_topics)
-        groups.append((gtotal, ProductGroup(name=str(prod)[:80], topics=ov_topics)))
-    groups.sort(key=lambda x: -x[0])
-    groups = [g for _, g in groups[:max_groups]]
-
-    # ---- KPI ----
-    total_signals = sum(f["mentions"] for f in topics_by_l2.values())
+    # ---- KPI: 3 из «исх», «новые» — из «динамика» ----
+    total_signals = len(df)
     n_sources = df[c_src].nunique() if c_src else 0
-    n_topics = len(topics_by_l2)
+    active_themes = df[c_l2].nunique() if c_l2 else n_topics
     kpis = [
         OverviewKPI(value=str(int(total_signals)), label="Сигналов проанализировано", icon_hint="signal"),
         OverviewKPI(value=str(int(n_sources)), label="Источников обратной связи", icon_hint="search"),
-        OverviewKPI(value=str(int(n_topics)), label="Активных тем", icon_hint="growth"),
+        OverviewKPI(value=str(int(active_themes)), label="Активных тем", icon_hint="growth"),
         OverviewKPI(value=str(int(new_count)), label="Новых тем", icon_hint="info"),
     ]
 
@@ -378,20 +309,17 @@ def read_overview(
         title=title, subtitle=subtitle, kpis=kpis,
         source_blocks=source_blocks, groups=groups,
     )
-    # Прозрачность: что РЕАЛЬНО прочитано из данных (для проверки без файла)
+    # Прозрачность для проверки без файла
     report["_rows_read"] = int(len(df))
     report["_sources_extracted"] = sorted(
         {str(s).strip() for s in df[c_src].dropna()} if c_src else set()
     )
     report["_groups_extracted"] = [
-        (g.name, [(t.title, t.mentions, t.dynamics_pct) for t in g.topics])
-        for g in groups
+        (g.name, [(t.title, t.mentions, t.dynamics_pct) for t in g.topics]) for g in groups
     ]
-    report["_dyn_matched"] = sum(
-        1 for g in groups for t in g.topics if t.dynamics_pct is not None
-    )
-    report["_dyn_unmatched"] = unmatched_dyn
-    report["_dyn_fuzzy"] = fuzzy_count
+    report["_topics_total"] = n_topics
+    report["_dyn_matched"] = sum(1 for g in groups for t in g.topics if t.dynamics_pct is not None)
+    report["_no_comment"] = no_comment
     logger.info("Overview-маппинг: %s", {k: v for k, v in report.items()
                                          if not k.startswith("_")})
     return overview, report
@@ -432,26 +360,24 @@ def format_report(report: Dict) -> str:
     groups = report.get("_groups_extracted")
     if groups:
         matched = report.get("_dyn_matched")
-        fuzzy = report.get("_dyn_fuzzy") or 0
+        total = report.get("_topics_total")
         suffix = ""
-        if matched is not None:
-            suffix = f" (динамика подтянулась к {matched} темам"
-            suffix += f", из них по схожести: {fuzzy})" if fuzzy else ")"
-        lines.append("  группы и темы из данных" + suffix + ":")
+        if matched is not None and total is not None:
+            suffix = f" (проценты у {matched} из {total} тем; остальные — новые)"
+        lines.append("  темы по продуктам из листа «динамика»" + suffix + ":")
         for gname, topics in groups:
             lines.append(f"    ▸ {gname}")
             for item in topics:
                 if isinstance(item, tuple):
                     title, ment, pct = item
-                    p = "—" if pct is None else f"{pct:+.0f}%"
-                    lines.append(f"        – {title}  [{ment} упом., динамика {p}]")
+                    p = "new" if pct is None else f"{pct:+.0f}%"
+                    lines.append(f"        – {title}  [{ment} упом., {p}]")
                 else:
                     lines.append(f"        – {item}")
-    unmatched = report.get("_dyn_unmatched")
-    if unmatched:
-        lines.append(f"  БЕЗ динамики (не нашёл % по названию темы) — {len(unmatched)}:")
-        for t in unmatched:
+    no_comment = report.get("_no_comment")
+    if no_comment:
+        lines.append(f"  БЕЗ комментария из «исх» — {len(no_comment)} "
+                     "(не нашёл похожую тему в «исх» для цитаты):")
+        for t in no_comment:
             lines.append(f"    ✗ {t}")
-        lines.append("    (проверь, совпадает ли 'тема' в листе 'динамика' с "
-                     "'Кластер сигналов 2 уровня' в 'исх')")
     return "\n".join(lines)
