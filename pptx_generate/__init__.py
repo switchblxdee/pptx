@@ -47,11 +47,18 @@ from .tool import (
     GeneratePresentationInput,
     GeneratePresentationTool,
 )
+from .verify_tool import VerifyClassificationInput, VerifyClassificationTool
+from .classify_verify import verify_and_count, format_verify_report
 
 __all__ = [
     # Tool
     "GenerateDigestTool",
     "GenerateDigestInput",
+    # Verification
+    "VerifyClassificationTool",
+    "VerifyClassificationInput",
+    "verify_and_count",
+    "format_verify_report",
     # Backward compatibility
     "GeneratePresentationTool",
     "GeneratePresentationInput",
