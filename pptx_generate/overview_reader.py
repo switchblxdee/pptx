@@ -15,6 +15,7 @@ overview_reader.py — собирает плотный слайд-обзор (Ov
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -66,6 +67,24 @@ def _parse_num(raw) -> Optional[float]:
         return float(s)
     except ValueError:
         return None
+
+
+def _match_key(s) -> str:
+    """Жёсткая нормализация для джойна тем: регистр, ё/е, пунктуация, пробелы."""
+    s = str(s).lower().replace("ё", "е")
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _dyn_lookup(table: dict, mk: str):
+    """Ищем значение по ключу темы: точное совпадение, иначе по вхождению."""
+    if mk in table:
+        return table[mk]
+    if len(mk) >= 10:
+        for k, v in table.items():
+            if k and len(k) >= 10 and (mk in k or k in mk):
+                return v
+    return None
 
 
 def _find_col(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
@@ -191,6 +210,7 @@ def read_overview(
     # ---- лист «динамика»: тема -> продукт(=группа) и % ----
     dyn_pct: Dict[str, float] = {}
     dyn_product: Dict[str, str] = {}
+    dyn_new: Dict[str, bool] = {}
     if dyn_sheet:
         dd = xls.parse(dyn_sheet)
         dd.columns = [str(c) for c in dd.columns]
@@ -202,10 +222,10 @@ def read_overview(
         report.update(dyn_key=dk, dyn_product=dprod, dyn_current=dcur,
                       dyn_previous=dprev, dyn_pct=dp, _dyn_columns=list(dd.columns))
         if dk:
-            raw_pcts: Dict[str, float] = {}   # ключ -> сырое число из колонки «динамика»
-            counts: Dict[str, Tuple[float, float]] = {}
+            raw_pcts: Dict[str, float] = {}   # колонка «динамика» (в этих данных — модуль)
+            counts: Dict[str, Tuple] = {}     # ключ -> (текущая, прошлая)
             for _, row in dd.iterrows():
-                key = _norm(row[dk])
+                key = _match_key(row[dk])
                 if not key:
                     continue
                 if dprod and pd.notna(row[dprod]):
@@ -214,24 +234,28 @@ def read_overview(
                     v = _parse_num(row[dp])
                     if v is not None:
                         raw_pcts[key] = v
-                if dcur and dprev:
-                    cur = pd.to_numeric(row[dcur], errors="coerce")
-                    prev = pd.to_numeric(row[dprev], errors="coerce")
-                    if pd.notna(cur) and pd.notna(prev):
-                        counts[key] = (float(cur), float(prev))
-            # Доли (0.22) или проценты (22)? Решаем по всей колонке разом.
+                cur = pd.to_numeric(row[dcur], errors="coerce") if dcur else None
+                prev = pd.to_numeric(row[dprev], errors="coerce") if dprev else None
+                counts[key] = (cur, prev)
+            # доли (0.22) или проценты (22)? — только для запасной колонки
             vals = list(raw_pcts.values())
             as_fraction = bool(vals) and max(abs(v) for v in vals) <= 1.5
             for key in set(list(raw_pcts) + list(counts)):
+                cur, prev = counts.get(key, (None, None))
+                has_cur = cur is not None and pd.notna(cur)
+                has_prev = prev is not None and pd.notna(prev)
                 pct = None
-                if key in raw_pcts:                       # приоритет — готовая колонка
+                if has_cur and has_prev and prev != 0:
+                    # ЗНАКОВЫЙ % из счётчиков — даёт направление (рост/падение)
+                    pct = (float(cur) - float(prev)) / float(prev) * 100.0
+                elif key in raw_pcts:
+                    # запас: готовая колонка (в этих данных — модуль, без знака)
                     pct = raw_pcts[key] * 100.0 if as_fraction else raw_pcts[key]
-                elif key in counts:                       # запасной — счёт из недель
-                    cur, prev = counts[key]
-                    if prev != 0:
-                        pct = (cur - prev) / prev * 100.0
                 if pct is not None:
                     dyn_pct[key] = float(pct)
+                elif has_cur and not has_prev:
+                    # есть сигналы на этой неделе, но нет прошлой -> новая тема
+                    dyn_new[key] = True
 
     # ---- источники по блокам ----
     source_blocks: List = []
@@ -250,21 +274,27 @@ def read_overview(
     # ---- группировка тем по продукту (из «динамика», иначе L1, иначе «Прочее») ----
     group_topics: Dict[str, List[Tuple[str, dict]]] = {}
     for l2, facts in topics_by_l2.items():
-        prod = dyn_product.get(_norm(l2)) or l1_by_l2.get(l2) or "Прочее"
+        prod = _dyn_lookup(dyn_product, _match_key(l2)) or l1_by_l2.get(l2) or "Прочее"
         group_topics.setdefault(prod, []).append((l2, facts))
 
     groups: List = []
     new_count = 0
+    unmatched_dyn: List[str] = []
     for prod, items in group_topics.items():
         items.sort(key=lambda x: -x[1]["mentions"])
         ov_topics = []
         for l2, facts in items[:max_topics_per_group]:
-            if facts["is_new"]:
+            mk = _match_key(l2)
+            pct = _dyn_lookup(dyn_pct, mk)
+            is_new = facts["is_new"] or bool(_dyn_lookup(dyn_new, mk))
+            if is_new:
                 new_count += 1
+            if pct is None and not is_new:
+                unmatched_dyn.append(str(l2))
             ov_topics.append(OverviewTopic(
                 title=str(l2)[:160], quote=facts["quote"], mentions=facts["mentions"],
-                dynamics_pct=dyn_pct.get(_norm(l2)),
-                status=("new" if facts["is_new"] and not facts["status"] else facts["status"]),
+                dynamics_pct=pct,
+                status=("new" if is_new and not facts["status"] else facts["status"]),
             ))
         gtotal = sum(t.mentions for t in ov_topics)
         groups.append((gtotal, ProductGroup(name=str(prod)[:80], topics=ov_topics)))
@@ -298,6 +328,7 @@ def read_overview(
     report["_dyn_matched"] = sum(
         1 for g in groups for t in g.topics if t.dynamics_pct is not None
     )
+    report["_dyn_unmatched"] = unmatched_dyn
     logger.info("Overview-маппинг: %s", {k: v for k, v in report.items()
                                          if not k.startswith("_")})
     return overview, report
@@ -349,4 +380,11 @@ def format_report(report: Dict) -> str:
                     lines.append(f"        – {title}  [{ment} упом., динамика {p}]")
                 else:
                     lines.append(f"        – {item}")
+    unmatched = report.get("_dyn_unmatched")
+    if unmatched:
+        lines.append(f"  БЕЗ динамики (не нашёл % по названию темы) — {len(unmatched)}:")
+        for t in unmatched:
+            lines.append(f"    ✗ {t}")
+        lines.append("    (проверь, совпадает ли 'тема' в листе 'динамика' с "
+                     "'Кластер сигналов 2 уровня' в 'исх')")
     return "\n".join(lines)
