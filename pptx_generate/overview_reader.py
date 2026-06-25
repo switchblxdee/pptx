@@ -366,7 +366,8 @@ def format_report(report: Dict) -> str:
              "  колонки -> роли:"]
     roles = ["cluster_l1", "cluster_l2", "source", "source_block",
              "text", "status", "count", "is_new",
-             "dyn_key", "dyn_product", "dyn_current", "dyn_previous", "dyn_pct"]
+             "dyn_key", "dyn_product", "dyn_current", "dyn_previous", "dyn_pct",
+             "dyn_status"]
     human = {
         "cluster_l1": "группа/продукт (кластер 1)",
         "cluster_l2": "тема (кластер 2)",
@@ -376,6 +377,7 @@ def format_report(report: Dict) -> str:
         "dyn_key": "'динамика': ключ-тема", "dyn_product": "'динамика': продукт=группа",
         "dyn_current": "'динамика': кол-во тек. неделя", "dyn_previous": "'динамика': кол-во прош. неделя",
         "dyn_pct": "'динамика': готовый %",
+        "dyn_status": "'динамика': СТАТУС (для значков)",
     }
     for r in roles:
         col = report.get(r)

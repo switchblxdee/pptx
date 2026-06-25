@@ -511,33 +511,61 @@ class DigestBuilder:
         r = int(r + (255 - r) * f); g = int(g + (255 - g) * f); b = int(b + (255 - b) * f)
         return f"{r:02X}{g:02X}{b:02X}"
 
+    @staticmethod
+    def _fill_gradient_alpha(shape, stops, angle_deg: float = 45.0) -> None:
+        """Градиентная заливка с прозрачностью.
+
+        stops: список (pos0..1, 'RRGGBB', alpha0..1). alpha=0 — полностью
+        прозрачно, 1 — непрозрачно. Угол в градусах.
+        """
+        from lxml import etree
+        A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+        spPr = shape._element.spPr
+        for tag in ("a:noFill", "a:solidFill", "a:gradFill", "a:blipFill", "a:pattFill"):
+            for el in spPr.findall(f"{{{A}}}{tag.split(':')[1]}"):
+                spPr.remove(el)
+        grad = etree.SubElement(spPr, f"{{{A}}}gradFill")
+        grad.set("rotWithShape", "1")
+        gsLst = etree.SubElement(grad, f"{{{A}}}gsLst")
+        for pos, hexc, alpha in stops:
+            gs = etree.SubElement(gsLst, f"{{{A}}}gs")
+            gs.set("pos", str(int(pos * 100000)))
+            clr = etree.SubElement(gs, f"{{{A}}}srgbClr")
+            clr.set("val", hexc.lstrip("#"))
+            a = etree.SubElement(clr, f"{{{A}}}alpha")
+            a.set("val", str(int(alpha * 100000)))
+        lin = etree.SubElement(grad, f"{{{A}}}lin")
+        lin.set("ang", str(int(angle_deg * 60000)))
+        lin.set("scaled", "1")
+        # порядок элементов в spPr: заливка должна идти перед ln
+        ln = spPr.find(f"{{{A}}}ln")
+        if ln is not None:
+            spPr.remove(grad); ln.addprevious(grad)
+
     def _ov_quote(self, slide, quote, x, y) -> int:
         qw = int(Inches(8.55)) - x
         qh = self._ov_quote_height(quote)
-        accent = self.palette.accent
-        # подложка-плашка светлого бренд-оттенка (для красоты)
+        teal = "0B9B98"
+        peach = self.palette.gradient_end if hasattr(self.palette, "gradient_end") else "F4C99A"
+        # мягкая полупрозрачная градиентная плашка (фон просвечивает)
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                       Emu(x), Emu(y), Emu(qw), Emu(qh))
-        card.adjustments[0] = 0.14
-        self._fill_solid(card, self._tint(accent, 0.90))
-        card.line.color.rgb = self._rgb(self._tint(accent, 0.66))
-        card.line.width = Pt(0.75)
-        card.shadow.inherit = False
-        # левый акцентный бар
-        bar = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
-                                     Emu(x), Emu(y), Emu(int(Inches(0.07))), Emu(qh))
-        bar.adjustments[0] = 0.5
-        self._fill_solid(bar, accent)
-        bar.line.fill.background()
-        bar.shadow.inherit = False
-        # текст комментария поверх плашки
-        ink = self._ink_on(self._tint(accent, 0.90), prefer=self.palette.text_muted,
-                           size_pt=9, bold=False)
+        card.adjustments[0] = 0.16
+        card.line.fill.background()  # без жёсткой рамки
+        try:
+            self._fill_gradient_alpha(
+                card,
+                [(0.0, teal, 0.22), (1.0, peach, 0.16)],
+                angle_deg=30.0,
+            )
+        except Exception:
+            self._fill_solid(card, self._tint(teal, 0.90))
+        # текст комментария — читаемый тёмно-бирюзовый курсив
         self._add_text(
-            slide, "«" + quote + "»", left=Emu(x + int(Inches(0.22))), top=Emu(y),
-            width=Emu(qw - int(Inches(0.34))), height=Emu(qh),
+            slide, "«" + quote + "»", left=Emu(x + int(Inches(0.2))), top=Emu(y),
+            width=Emu(qw - int(Inches(0.36))), height=Emu(qh),
             font=self.style.typography.body_font, size=9, italic=True,
-            color=ink, anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
+            color=self._muted_on_background(), anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
         )
         return y + qh
 
@@ -589,8 +617,14 @@ class DigestBuilder:
                     height=Inches(0.3), font=self.style.typography.heading_font,
                     size=15, bold=True, color="0FB880", align=PP_ALIGN.CENTER,
                 )
-        elif "анализ" in s or "кандидат" in s:  # на анализе — лупа
-            self._ov_magnifier(slide, x + int(Inches(0.18)), cy)
+        elif "анализ" in s or "кандидат" in s:  # на анализе — лупа (PNG, R7-safe)
+            icon = self._resolve_asset("icons/status_analysis.png")
+            if icon:
+                slide.shapes.add_picture(icon, Emu(x + int(Inches(0.1))),
+                                         Emu(cy + int(Inches(0.01))),
+                                         height=Inches(0.24))
+            else:
+                self._ov_magnifier(slide, x + int(Inches(0.18)), cy)
         elif "new" in s or "нов" in s:  # новая тема — фиолетовый квадрат + new
             sq = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x + int(Inches(0.05))),
                                         Emu(cy + int(Inches(0.03))), Inches(0.12), Inches(0.12))
