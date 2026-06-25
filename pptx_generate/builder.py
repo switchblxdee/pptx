@@ -460,8 +460,8 @@ class DigestBuilder:
 
     def _ov_quote_height(self, quote) -> int:
         qw = int(Inches(8.55)) - (MARGIN_X + int(Inches(0.45)))
-        lines = self._wrap_lines(quote, qw - int(Inches(0.2)), 9)
-        return max(int(Inches(0.28)), int(Inches(0.19)) * lines + int(Inches(0.10)))
+        lines = self._wrap_lines(quote, qw - int(Inches(0.3)), 9)
+        return max(int(Inches(0.36)), int(Inches(0.19)) * lines + int(Inches(0.18)))
 
     def _ov_topic_height(self, t) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
@@ -504,18 +504,40 @@ class DigestBuilder:
         line.line.width = Pt(0.5)
         return yy + int(Inches(0.12))
 
+    def _tint(self, hex_color: str, f: float) -> str:
+        """Осветляет цвет к белому: f=0 — исходный, f=1 — белый."""
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        r = int(r + (255 - r) * f); g = int(g + (255 - g) * f); b = int(b + (255 - b) * f)
+        return f"{r:02X}{g:02X}{b:02X}"
+
     def _ov_quote(self, slide, quote, x, y) -> int:
         qw = int(Inches(8.55)) - x
         qh = self._ov_quote_height(quote)
-        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x), Emu(y),
-                                     Emu(int(Inches(0.04))), Emu(qh))
-        self._fill_solid(bar, self.palette.accent)
+        accent = self.palette.accent
+        # подложка-плашка светлого бренд-оттенка (для красоты)
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                      Emu(x), Emu(y), Emu(qw), Emu(qh))
+        card.adjustments[0] = 0.14
+        self._fill_solid(card, self._tint(accent, 0.90))
+        card.line.color.rgb = self._rgb(self._tint(accent, 0.66))
+        card.line.width = Pt(0.75)
+        card.shadow.inherit = False
+        # левый акцентный бар
+        bar = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                     Emu(x), Emu(y), Emu(int(Inches(0.07))), Emu(qh))
+        bar.adjustments[0] = 0.5
+        self._fill_solid(bar, accent)
         bar.line.fill.background()
+        bar.shadow.inherit = False
+        # текст комментария поверх плашки
+        ink = self._ink_on(self._tint(accent, 0.90), prefer=self.palette.text_muted,
+                           size_pt=9, bold=False)
         self._add_text(
-            slide, "«" + quote + "»", left=Emu(x + int(Inches(0.16))), top=Emu(y),
-            width=Emu(qw - int(Inches(0.16))), height=Emu(qh),
+            slide, "«" + quote + "»", left=Emu(x + int(Inches(0.22))), top=Emu(y),
+            width=Emu(qw - int(Inches(0.34))), height=Emu(qh),
             font=self.style.typography.body_font, size=9, italic=True,
-            color=self._muted_on_background(), anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
+            color=ink, anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
         )
         return y + qh
 
