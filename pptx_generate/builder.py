@@ -376,17 +376,17 @@ class DigestBuilder:
             cx0, cx1 = cols[bi] if bi < len(cols) else cols[-1]
             self._add_text(
                 slide, blk.title + ":", left=Emu(cx0), top=Emu(y),
-                width=Emu(cx1 - cx0), height=Inches(0.26),
-                font=self.style.typography.heading_font, size=10.5, bold=True,
+                width=Emu(cx1 - cx0), height=Inches(0.24),
+                font=self.style.typography.heading_font, size=9.5, bold=True,
                 color=C.to_hex(self._accent_ink_on_bg(), with_hash=False),
             )
-            py = y + int(Inches(0.32))
+            py = y + int(Inches(0.27))
             px = cx0
-            line_h = int(Inches(0.37))
+            line_h = int(Inches(0.30))
             for tag in blk.tags:
                 px, py = self._ov_pill(slide, tag, px, py, cx0, cx1, line_h)
             y_end = max(y_end, py + line_h)
-        return y_end + int(Inches(0.08))
+        return y_end + int(Inches(0.04))
 
     def _accent_ink_on_bg(self) -> str:
         """Акцент, читаемый на фоне слайда (для подзаголовков секций)."""
@@ -397,26 +397,27 @@ class DigestBuilder:
         return self._text_on_background()
 
     def _ov_pill(self, slide, text, x, y, col_left, col_right, line_h):
-        char_w = int(Inches(0.066))
-        pad = int(Inches(0.34))
+        char_w = int(Inches(0.052))
+        pad = int(Inches(0.24))
+        ph = int(Inches(0.24))
         w = min(len(text) * char_w + pad, col_right - col_left)
         if x + w > col_right and x > col_left:
             x = col_left
             y += line_h
         pill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
-                                      Emu(x), Emu(y), Emu(w), Emu(int(Inches(0.30))))
+                                      Emu(x), Emu(y), Emu(w), Emu(ph))
         pill.adjustments[0] = 0.5
         self._fill_solid(pill, "FFFFFF")
         pill.line.color.rgb = self._rgb(self._obj_color or "D7DCE3")
         pill.line.width = Pt(1.0 if self._obj_color else 0.75)
         self._add_text(
             slide, text, left=Emu(x), top=Emu(y),
-            width=Emu(w), height=Emu(int(Inches(0.30))),
-            font=self.style.typography.body_font, size=8.5,
+            width=Emu(w), height=Emu(ph),
+            font=self.style.typography.body_font, size=7.5,
             on="FFFFFF", role="strong",
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
         )
-        return x + w + int(Inches(0.10)), y
+        return x + w + int(Inches(0.08)), y
 
     def _ov_columns_header(self, slide, y: int) -> int:
         # правые подписи колонок над группами
@@ -476,7 +477,8 @@ class DigestBuilder:
         h = int(Inches(0.26)) * title_lines + int(Inches(0.02))
         if getattr(t, "quote", None):
             h += self._ov_quote_height(t.quote)
-        return h + int(Inches(0.18))  # разделитель + нижний зазор
+        h += int(Inches(0.18))  # разделитель + нижний зазор
+        return max(h, int(Inches(0.66)))  # хватает на упоминания + рамку %
 
     def _ov_topic_row(self, slide, t, idx, y: int) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
@@ -579,35 +581,43 @@ class DigestBuilder:
         return y + qh
 
     def _ov_metrics(self, slide, t, y) -> None:
-        # упоминания
+        cx = int(Inches(10.35))          # центр колонки динамики
+        # упоминания: число + «упом.» сверху
         self._add_text(
-            slide, f"{t.mentions}", left=Emu(int(Inches(9.4))), top=Emu(y),
-            width=Inches(0.6), height=Inches(0.3),
+            slide, f"{t.mentions}", left=Emu(int(Inches(9.5))), top=Emu(y),
+            width=Inches(0.78), height=Inches(0.28),
             font=self.style.typography.heading_font, size=13, bold=True,
             color=self._text_on_background(), align=PP_ALIGN.RIGHT,
         )
         self._add_text(
-            slide, "упом.", left=Emu(int(Inches(10.0))), top=Emu(y + int(Inches(0.04))),
-            width=Inches(0.5), height=Inches(0.25),
+            slide, "упом.", left=Emu(int(Inches(10.32))), top=Emu(y + int(Inches(0.05))),
+            width=Inches(0.6), height=Inches(0.22),
             font=self.style.typography.body_font, size=8,
             color=self._muted_on_background(),
         )
-        # динамика
+        # динамика — ПОД числом, в рамке цвета фоновых объектов
         if t.dynamics_pct is not None:
             up = t.dynamics_pct > 0
             flat = abs(t.dynamics_pct) < 0.5
             arrow = "≡" if flat else ("▲" if up else "▼")
             col = "64748B" if flat else ("E2362D" if up else "0FB880")
             sign = "+" if up and not flat else ""
+            bw, bh = int(Inches(1.0)), int(Inches(0.27))
+            bx, by = cx - bw // 2, y + int(Inches(0.30))
+            box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                         Emu(bx), Emu(by), Emu(bw), Emu(bh))
+            box.adjustments[0] = 0.45
+            self._fill_solid(box, "FFFFFF")
+            box.line.color.rgb = self._rgb(self._obj_color or "D7DCE3")
+            box.line.width = Pt(1.25 if self._obj_color else 0.75)
             self._add_text(
                 slide, f"{arrow} {sign}{t.dynamics_pct:.0f}%",
-                left=Emu(int(Inches(10.55))), top=Emu(y),
-                width=Inches(1.0), height=Inches(0.3),
-                font=self.style.typography.heading_font, size=11, bold=True,
-                color=col, align=PP_ALIGN.CENTER,
+                left=Emu(bx), top=Emu(by), width=Emu(bw), height=Emu(bh),
+                font=self.style.typography.heading_font, size=10.5, bold=True,
+                color=col, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
             )
         # статус
-        self._ov_status(slide, t.status, int(Inches(11.55)), y)
+        self._ov_status(slide, t.status, int(Inches(11.55)), y + int(Inches(0.04)))
 
     def _ov_status(self, slide, status, x, y) -> None:
         if not status:
