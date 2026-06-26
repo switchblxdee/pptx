@@ -86,6 +86,9 @@ class DigestBuilder:
         self.bg_content = self._resolve_asset(getattr(spec.style, "background_content", None))
         # Брендовые иконки SberF1 включаем вместе с брендовым фоном
         self.use_brand_icons = bool(self.bg_content or self.bg_cover)
+        # Пользовательский цвет фоновых объектов (по промпту)
+        oc = getattr(spec.style, "object_color", None)
+        self._obj_color = oc.lstrip("#").upper() if oc else None
         self.prs = Presentation()
         self.prs.slide_width = SLIDE_WIDTH
         self.prs.slide_height = SLIDE_HEIGHT
@@ -324,11 +327,13 @@ class DigestBuilder:
         return y + kh + int(Inches(0.14))
 
     def _ov_kpi_card(self, slide, kpi, x, y, w, h) -> None:
+        kfill = self._obj_color or self.palette.card_bg
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                       Emu(x), Emu(y), Emu(w), Emu(h))
         card.adjustments[0] = 0.14
-        self._fill_solid(card, self.palette.card_bg)
-        card.line.color.rgb = self._rgb("D7DCE3")
+        self._fill_solid(card, kfill)
+        card.line.color.rgb = self._rgb(self._tint(self._obj_color, 0.25)
+                                        if self._obj_color else "D7DCE3")
         card.line.width = Pt(0.75)
         self._apply_subtle_shadow(card)
         num_w = int(w * 0.32)
@@ -336,21 +341,21 @@ class DigestBuilder:
             slide, str(kpi.value), left=Emu(x + int(Inches(0.08))), top=Emu(y),
             width=Emu(num_w), height=Emu(h),
             font=self.style.typography.heading_font, size=18, bold=True,
-            on=self.palette.card_bg, role="strong",
+            on=kfill, role="strong",
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
         )
         self._add_text(
             slide, kpi.label, left=Emu(x + num_w), top=Emu(y),
             width=Emu(w - num_w - int(Inches(0.26))), height=Emu(h),
             font=self.style.typography.body_font, size=8,
-            on=self.palette.card_bg, role="muted",
+            on=kfill, role="muted",
             anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
         )
         # иконка в правом верхнем углу
         isz = int(Inches(0.18))
         ix = x + w - isz - int(Inches(0.09))
         iy = y + int(Inches(0.09))
-        ink = self._ink(self.palette.card_bg, role="muted", size_pt=10)
+        ink = self._ink(kfill, role="muted", size_pt=10)
         if kpi.icon_hint:
             self._draw_icon(slide, kpi.icon_hint, Emu(ix), Emu(iy), Emu(isz), ink)
 
@@ -402,8 +407,8 @@ class DigestBuilder:
                                       Emu(x), Emu(y), Emu(w), Emu(int(Inches(0.30))))
         pill.adjustments[0] = 0.5
         self._fill_solid(pill, "FFFFFF")
-        pill.line.color.rgb = self._rgb("D7DCE3")
-        pill.line.width = Pt(0.75)
+        pill.line.color.rgb = self._rgb(self._obj_color or "D7DCE3")
+        pill.line.width = Pt(1.0 if self._obj_color else 0.75)
         self._add_text(
             slide, text, left=Emu(x), top=Emu(y),
             width=Emu(w), height=Emu(int(Inches(0.30))),
@@ -430,20 +435,21 @@ class DigestBuilder:
         return y + int(Inches(0.34))
 
     def _ov_group_header(self, slide, g, y: int, cont: bool = False) -> int:
+        barcol = self._tint(self._obj_color, 0.5) if self._obj_color else self._PEACH
         bar = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                      MARGIN_X, Emu(y),
                                      int(self._OV_RIGHT) - MARGIN_X, Inches(0.34))
         bar.adjustments[0] = 0.35
-        self._fill_solid(bar, self._PEACH)
+        self._fill_solid(bar, barcol)
         bar.line.fill.background()
         name = g.name + ("  (прод.)" if cont else "")
         self._add_text(
             slide, name, left=MARGIN_X + int(Inches(0.2)), top=Emu(y),
             width=Inches(8.3), height=Inches(0.34),
             font=self.style.typography.heading_font, size=11, bold=True,
-            on=self._PEACH, role="strong", anchor=MSO_ANCHOR.MIDDLE,
+            on=barcol, role="strong", anchor=MSO_ANCHOR.MIDDLE,
         )
-        lbl = self._ink(self._PEACH, role="muted", size_pt=8)
+        lbl = self._ink(barcol, role="muted", size_pt=8)
         self._add_text(
             slide, "Динамика к прошлой неделе", left=Emu(int(Inches(9.55))), top=Emu(y),
             width=Inches(1.85), height=Inches(0.34),
@@ -546,7 +552,12 @@ class DigestBuilder:
         qw = int(Inches(8.55)) - x
         qh = self._ov_quote_height(quote)
         teal = "0B9B98"
-        peach = self.palette.gradient_end if hasattr(self.palette, "gradient_end") else "F4C99A"
+        if self._obj_color:
+            c1 = c2 = self._obj_color
+            a1, a2 = 0.26, 0.08
+        else:
+            c1, c2 = teal, (self.palette.gradient_end if hasattr(self.palette, "gradient_end") else "F4C99A")
+            a1, a2 = 0.22, 0.16
         # мягкая полупрозрачная градиентная плашка (фон просвечивает)
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                       Emu(x), Emu(y), Emu(qw), Emu(qh))
@@ -554,12 +565,10 @@ class DigestBuilder:
         card.line.fill.background()  # без жёсткой рамки
         try:
             self._fill_gradient_alpha(
-                card,
-                [(0.0, teal, 0.22), (1.0, peach, 0.16)],
-                angle_deg=30.0,
+                card, [(0.0, c1, a1), (1.0, c2, a2)], angle_deg=30.0,
             )
         except Exception:
-            self._fill_solid(card, self._tint(teal, 0.90))
+            self._fill_solid(card, self._tint(c1, 0.90))
         # текст комментария — читаемый тёмно-бирюзовый курсив
         self._add_text(
             slide, "«" + quote + "»", left=Emu(x + int(Inches(0.2))), top=Emu(y),

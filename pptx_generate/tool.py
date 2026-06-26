@@ -80,6 +80,16 @@ class GenerateDigestInput(BaseModel):
         default=None,
         description="Куда сохранить .pptx. Если не указан — рядом с входным файлом.",
     )
+    object_color: Optional[str] = Field(
+        default=None,
+        description=(
+            "Цвет ФОНОВЫХ ОБЪЕКТОВ слайда-обзора (шапки групп, пилюли-источники, "
+            "KPI-карточки, плашки комментариев). HEX ('7B61FF') или название "
+            "цвета рус/англ ('фиолетовый', 'purple', 'красный'). Заполняй, когда "
+            "пользователь просит сделать фоновые объекты/подложки определённого "
+            "цвета (напр. 'сделай фоновые объекты для текста фиолетовыми')."
+        ),
+    )
     slide_count: Optional[int] = Field(
         default=None,
         description=(
@@ -269,6 +279,7 @@ class GenerateDigestTool(BaseTool):
         overview_title: Optional[str] = None,
         period: Optional[str] = None,
         issue_number: Optional[str] = None,
+        object_color: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Синхронный запуск."""
@@ -276,7 +287,7 @@ class GenerateDigestTool(BaseTool):
             if layout == "overview" or self._looks_like_overview(xlsx_path):
                 return self._generate_overview(
                     xlsx_path, style_prompt, output_path, force_theme,
-                    overview_title, period, issue_number,
+                    overview_title, period, issue_number, object_color,
                 )
             return self._generate(
                 xlsx_path, style_prompt, output_path,
@@ -308,6 +319,7 @@ class GenerateDigestTool(BaseTool):
         overview_title: Optional[str],
         period: Optional[str],
         issue_number: Optional[str],
+        object_color: Optional[str] = None,
     ) -> str:
         """НОВЫЙ РЕЖИМ: плотный слайд-обзор из листов 'исх' + 'динамика'.
 
@@ -353,6 +365,16 @@ class GenerateDigestTool(BaseTool):
         spec = self._apply_detected_palette(
             spec, style_prompt, force_theme or "sberf1",
         )
+
+        # цвет фоновых объектов: явный параметр > распознанный из style_prompt
+        from .colors import resolve_color_name, extract_object_color
+        obj_hex = resolve_color_name(object_color) or extract_object_color(style_prompt)
+        if obj_hex:
+            try:
+                spec.style.object_color = obj_hex
+                logger.info("Фоновые объекты перекрашены в #%s", obj_hex)
+            except Exception:
+                pass
 
         if output_path is None:
             output_path = str(Path(xlsx_path).with_suffix(".pptx"))
