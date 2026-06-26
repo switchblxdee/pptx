@@ -48,6 +48,20 @@ DYN_HINTS = {
     "status": ["статус", "status", "состояни"],
 }
 
+# Фиксированные блоки источников — выводятся ВСЕГДА, независимо от данных.
+FIXED_SOURCE_BLOCKS = [
+    ("Чаты в Сберчате", [
+        "RewAi: Code Review Agent", "делай вместе с Чемоданом", "AI Коктейль",
+        "SberOS+P7+Почта", "SberWorks APIStudio", "GIGA IDE support",
+        "Поддержка Sbermock", "Сбер Id. AI Workspace", "Atomic Code",
+        "AI in Dev Community", "VibeCoding Community", "GigaChat API",
+        "Первопроходцы Сбертрек",
+    ]),
+    ("Другие источники", [
+        "Обращения в SberF1", "Виджет SW", "Открытые диалоги", "Help Desk SW",
+    ]),
+]
+
 
 def _norm(s) -> str:
     return str(s).strip().lower().replace("ё", "е")
@@ -309,19 +323,10 @@ def read_overview(
     groups.sort(key=lambda x: (-x[0], -x[1]))
     groups = [g for _, _, g in groups[:max_groups]]
 
-    # ---- источники из «исх» ----
-    source_blocks: List = []
-    if c_src:
-        if c_block:
-            for block, sub in df.groupby(c_block, sort=False):
-                tags = sorted({str(s).strip() for s in sub[c_src].dropna() if str(s).strip()})
-                if tags:
-                    source_blocks.append(SourceBlock(title=str(block)[:40], tags=tags[:40]))
-            source_blocks.sort(key=lambda b: -len(b.tags))
-            source_blocks = source_blocks[:2]
-        else:
-            tags = sorted({str(s).strip() for s in df[c_src].dropna() if str(s).strip()})
-            source_blocks = [SourceBlock(title="Источники", tags=tags[:40])]
+    # ---- источники: ВСЕГДА фиксированные блоки (по требованию) ----
+    source_blocks = [
+        SourceBlock(title=t, tags=list(tags)) for t, tags in FIXED_SOURCE_BLOCKS
+    ]
 
     # ---- KPI: 3 из «исх», «новые» — из «динамика» ----
     total_signals = len(df)
