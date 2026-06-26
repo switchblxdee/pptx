@@ -684,10 +684,14 @@ class DigestBuilder:
         ]
         x = MARGIN_X
         pain_icon = self._resolve_asset("icons/status_pain.png")
+        loupe_icon = self._resolve_asset("icons/status_analysis.png")
         for glyph, gcol, txt in parts:
             if glyph.startswith("✳") and pain_icon:
                 slide.shapes.add_picture(pain_icon, Emu(x), Emu(y - int(Inches(0.02))),
                                          height=Inches(0.22))
+            elif glyph.startswith("⌕") and loupe_icon:
+                slide.shapes.add_picture(loupe_icon, Emu(x), Emu(y - int(Inches(0.01))),
+                                         height=Inches(0.2))
             else:
                 self._add_text(slide, glyph, left=Emu(x), top=Emu(y), width=Inches(0.4),
                                height=Inches(0.25), font=self.style.typography.body_font,
