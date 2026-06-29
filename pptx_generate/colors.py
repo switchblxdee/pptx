@@ -71,3 +71,31 @@ def extract_object_color(prompt: Optional[str]) -> Optional[str]:
             return hexc
     m = _HEX_RE.search(prompt)
     return m.group(1).upper() if m else None
+
+
+# Нейтральные ключи: они НЕ годятся как акцентный цвет карточек
+# (чёрный/белый/серый сделали бы карточки чёрными/белыми, а это не «тон»).
+_NEUTRAL_KEYS = {"чёрн", "черн", "black", "бел", "white", "сер", "gray", "grey"}
+
+
+def extract_accent_color(prompt: Optional[str]) -> Optional[str]:
+    """Достаёт ЛЮБОЙ акцентный цвет из свободной фразы.
+
+    В отличие от extract_object_color, не требует слова-маркера: ловит
+    «в фиолетовых тонах», «фиолетовая презентация», «#7B61FF» и т.п.
+    Нужен как фолбэк для overview, где единственный осмысленный цветовой
+    рычаг — цвет фоновых объектов (фон обзора зафиксирован отдельно).
+    Нейтральные (чёрный/белый/серый) игнорируются.
+    """
+    if not prompt:
+        return None
+    m = _HEX_RE.search(prompt)
+    if m:
+        return m.group(1).upper()
+    low = prompt.lower()
+    for key, hexc in COLOR_NAMES.items():
+        if key in _NEUTRAL_KEYS:
+            continue
+        if key in low:
+            return hexc
+    return None

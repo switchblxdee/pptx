@@ -86,6 +86,11 @@ class DigestBuilder:
         self.bg_content = self._resolve_asset(getattr(spec.style, "background_content", None))
         # Брендовые иконки SberF1 включаем вместе с брендовым фоном
         self.use_brand_icons = bool(self.bg_content or self.bg_cover)
+        # Если фон — закреплённая картинка, контраст текста считаем от ЕЁ
+        # реальной светлоты, а не от стоп-цветов палитры/темы. Иначе тёмная
+        # тема (напр. force_theme='dark') покрасит текст белым, а фон при этом
+        # светлый v11-градиент → белое на светлом = невидимо.
+        self._bg_img_stops = self._sample_bg_stops(self.bg_content) if self.bg_content else None
         # Пользовательский цвет фоновых объектов (по промпту)
         oc = getattr(spec.style, "object_color", None)
         self._obj_color = oc.lstrip("#").upper() if oc else None
@@ -2083,7 +2088,33 @@ class DigestBuilder:
     # ----------------------------------------------------------------------- #
 
     def _gradient_stops(self) -> list[str]:
+        # Если задан фон-картинка — берём её реальные тёмный/светлый тона
+        # (контраст текста подстраивается под настоящий фон, а не под тему).
+        if getattr(self, "_bg_img_stops", None):
+            return self._bg_img_stops
         return [self.palette.gradient_start, self.palette.gradient_end]
+
+    @staticmethod
+    def _sample_bg_stops(path: str) -> Optional[list[str]]:
+        """Достаёт из фоновой картинки представительные тёмный/светлый тона.
+
+        Берём 10-й и 90-й перцентили по яркости (устойчиво к одиночным
+        выбросам-пикселям). Возвращаем [тёмный_hex, светлый_hex] — на их паре
+        авто-контраст подбирает цвет текста, читаемый по всему фону.
+        """
+        try:
+            from PIL import Image
+            im = Image.open(path).convert("RGB").resize((48, 27))
+            px = list(im.getdata())
+            lum = lambda c: 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+            s = sorted(px, key=lum)
+            n = len(s)
+            lo = s[max(0, n // 10)]
+            hi = s[min(n - 1, n - 1 - n // 10)]
+            to_hex = lambda c: f"{c[0]:02X}{c[1]:02X}{c[2]:02X}"
+            return [to_hex(lo), to_hex(hi)]
+        except Exception:
+            return None
 
     def _ink(self, bg: str, *, role: str = "strong",
              size_pt: float = 14, bold: bool = False) -> str:
