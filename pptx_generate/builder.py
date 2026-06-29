@@ -553,25 +553,9 @@ class DigestBuilder:
     def _ov_quote(self, slide, quote, x, y) -> int:
         qw = int(Inches(8.55)) - x
         qh = self._ov_quote_height(quote)
-        teal = "0B9B98"
-        if self._obj_color:
-            c1 = c2 = self._obj_color
-            a1, a2 = 0.26, 0.08
-        else:
-            c1, c2 = teal, (self.palette.gradient_end if hasattr(self.palette, "gradient_end") else "F4C99A")
-            a1, a2 = 0.22, 0.16
-        # мягкая полупрозрачная градиентная плашка (фон просвечивает)
-        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
-                                      Emu(x), Emu(y), Emu(qw), Emu(qh))
-        card.adjustments[0] = 0.16
-        card.line.fill.background()  # без жёсткой рамки
-        try:
-            self._fill_gradient_alpha(
-                card, [(0.0, c1, a1), (1.0, c2, a2)], angle_deg=30.0,
-            )
-        except Exception:
-            self._fill_solid(card, self._tint(c1, 0.90))
-        # текст комментария — читаемый тёмно-бирюзовый курсив
+        # Без подложки: комментарий — просто курсив под заголовком (как в
+        # референсе). Раньше тут была полупрозрачная градиентная плашка —
+        # убрана по требованию (лишний визуальный шум на плотном слайде).
         self._add_text(
             slide, "«" + quote + "»", left=Emu(x + int(Inches(0.2))), top=Emu(y),
             width=Emu(qw - int(Inches(0.36))), height=Emu(qh),
@@ -2125,7 +2109,10 @@ class DigestBuilder:
             return C.to_hex(prefer, with_hash=False)
         # Не проходит — ЧЁТКИЙ чёрный/белый (без мутных полутонов).
         base = C.best_text_color(bg)
-        if role == "muted":
+        # Софт-полутон только на СВЕТЛОМ фоне (тёмный текст к серому читается
+        # мягко). На ТЁМНОМ фоне белый текст не мутним подмешиванием фона —
+        # иначе на тёмнофиолетовом подписи уходят в грязно-сиреневый.
+        if role == "muted" and self._luminance(bg) >= 0.5:
             soft = C._mix(base, C.parse_color(bg), 0.28)
             if C.contrast_ratio(soft, bg) >= C.AA_LARGE:
                 return C.to_hex(soft, with_hash=False)

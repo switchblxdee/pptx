@@ -366,6 +366,14 @@ class GenerateDigestTool(BaseTool):
             spec, style_prompt, force_theme or "sberf1",
         )
 
+        # фон overview — мягкий многоцветный градиент (синее свечение
+        # сверху-слева, лавандово-персиковое снизу-справа), вытащенный из
+        # эталонного шаблона v11. Перекрывает бренд-фон именно для обзора.
+        try:
+            spec.style.background_content = "bg_overview.png"
+        except Exception:
+            pass
+
         # цвет фоновых объектов: явный параметр > распознанный из style_prompt
         from .colors import resolve_color_name, extract_object_color
         obj_hex = resolve_color_name(object_color) or extract_object_color(style_prompt)
