@@ -341,28 +341,28 @@ class DigestBuilder:
                                         if self._obj_color else "D7DCE3")
         card.line.width = Pt(0.75)
         self._apply_subtle_shadow(card)
+        num_ink, label_ink = self._card_text_ink(kfill)
         num_w = int(w * 0.32)
         self._add_text(
             slide, str(kpi.value), left=Emu(x + int(Inches(0.08))), top=Emu(y),
             width=Emu(num_w), height=Emu(h),
             font=self.style.typography.heading_font, size=18, bold=True,
-            on=kfill, role="strong",
+            color=num_ink,
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
         )
         self._add_text(
             slide, kpi.label, left=Emu(x + num_w), top=Emu(y),
             width=Emu(w - num_w - int(Inches(0.26))), height=Emu(h),
             font=self.style.typography.body_font, size=8,
-            on=kfill, role="muted",
+            color=label_ink,
             anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
         )
         # иконка в правом верхнем углу
         isz = int(Inches(0.18))
         ix = x + w - isz - int(Inches(0.09))
         iy = y + int(Inches(0.09))
-        ink = self._ink(kfill, role="muted", size_pt=10)
         if kpi.icon_hint:
-            self._draw_icon(slide, kpi.icon_hint, Emu(ix), Emu(iy), Emu(isz), ink)
+            self._draw_icon(slide, kpi.icon_hint, Emu(ix), Emu(iy), Emu(isz), label_ink)
 
     def _ov_sources(self, slide, ov, y: int) -> int:
         blocks = ov.source_blocks[:2]
@@ -2148,6 +2148,24 @@ class DigestBuilder:
             if C.contrast_ratio(soft, bg) >= C.AA_LARGE:
                 return C.to_hex(soft, with_hash=False)
         return C.to_hex(base, with_hash=False)
+
+    def _card_text_ink(self, fill: str) -> tuple[str, str]:
+        """Цвет текста для СПЛОШНОЙ цветной карточки (KPI-плашки).
+
+        Карточка с заливкой object_color по дизайну — «тёмная цветная плашка
+        с белым текстом». Поэтому на ней предпочитаем БЕЛЫЙ, пока он читаем
+        (порог AA_LARGE — это крупный display-текст), а не математически
+        оптимальный чёрный (на средних тонах вроде 7B61FF чёрный по WCAG
+        чуть контрастнее, из-за чего авто-контраст ошибочно делал текст
+        чёрным). На светлой карточке (белый не проходит — напр. жёлтая или
+        дефолтный белый card_bg) — обычный авто-контраст.
+
+        Возвращает (цвет_числа, цвет_подписи).
+        """
+        if C.contrast_ratio("FFFFFF", fill) >= C.AA_LARGE:
+            return "FFFFFF", "EDEBF7"   # белый + чуть приглушённый белый
+        return (self._ink(fill, role="strong", size_pt=18),
+                self._ink(fill, role="muted", size_pt=8))
 
     def _ink_on(self, fill_bg: str, *, prefer: Optional[str] = None,
                 size_pt: float = 12, bold: bool = True) -> str:

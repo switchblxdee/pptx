@@ -7,7 +7,7 @@ from typing import Optional
 # Название цвета -> HEX (подобраны достаточно насыщенные/читаемые тона)
 COLOR_NAMES = {
     # фиолетовый
-    "фиолетов": "7B61FF", "пурпурн": "7B61FF", "purple": "7B61FF", "violet": "7B61FF",
+    "фиолетов": "7C3AED", "пурпурн": "7C3AED", "purple": "7C3AED", "violet": "7C3AED",
     "лавандов": "A78BFA", "lavender": "A78BFA", "сиренев": "9D7BEA",
     "индиго": "6366F1", "indigo": "6366F1",
     # синий/голубой
