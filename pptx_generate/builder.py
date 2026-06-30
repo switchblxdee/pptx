@@ -301,20 +301,62 @@ class DigestBuilder:
         return slide, y
 
     def _ov_header(self, slide, ov, continued: bool = False) -> int:
-        title = ov.title + ("  (продолжение)" if continued else "")
-        self._add_text(
-            slide, title, left=MARGIN_X, top=Inches(0.28),
-            width=Inches(7.3), height=Inches(0.55),
-            font=self.style.typography.heading_font, size=18, bold=True,
-            color=self._text_on_background(), anchor=MSO_ANCHOR.MIDDLE,
+        title = ov.title  # без «(продолжение)» — крупный заголовок налезал на мету
+        lilac = "9D7BEA"
+        # «Голос IT» — сиреневым, остальное — обычным цветом фона; размер 24
+        self._add_title_runs(
+            slide, title, prefix="Голос IT", prefix_color=lilac,
+            rest_color=self._text_on_background(),
+            left=MARGIN_X, top=Inches(0.22), width=Inches(9.2), height=Inches(0.62),
+            font=self.style.typography.heading_font, size=24,
         )
-        return int(Inches(0.92))
+        # «палка» между заголовком и текстом — горизонтальная линия во всю ширину
+        ry = int(Inches(0.86))
+        line = slide.shapes.add_connector(1, MARGIN_X, Emu(ry),
+                                          int(self._OV_RIGHT), Emu(ry))
+        line.line.color.rgb = self._rgb(lilac)
+        line.line.width = Pt(1.4)
+        return int(Inches(0.98))
+
+    def _add_title_runs(self, slide, text, *, prefix, prefix_color, rest_color,
+                        left, top, width, height, font, size) -> None:
+        """Заголовок двумя ранами: цветной префикс + остальной текст."""
+        box = slide.shapes.add_textbox(left, top, width, height)
+        tf = box.text_frame
+        tf.word_wrap = True
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        tf.margin_left = Emu(0); tf.margin_right = Emu(0)
+        tf.margin_top = Emu(0); tf.margin_bottom = Emu(0)
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.LEFT
+        if prefix and text.startswith(prefix):
+            parts = [(prefix, prefix_color), (text[len(prefix):], rest_color)]
+        else:
+            parts = [(text, rest_color)]
+        for s, col in parts:
+            if not s:
+                continue
+            run = p.add_run()
+            run.text = s
+            run.font.name = font
+            run.font.size = Pt(size)
+            run.font.bold = True
+            run.font.color.rgb = self._rgb(col)
 
     def _ov_subtitle_and_kpis(self, slide, ov, y: int) -> int:
         if ov.subtitle:
+            # вертикальная «палка» сбоку от текста «Темы, волнующие…»
+            bar = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                MARGIN_X, Emu(y + int(Inches(0.05))),
+                int(Inches(0.05)), int(Inches(0.62)))
+            bar.adjustments[0] = 0.5
+            self._fill_solid(bar, "9D7BEA")
+            bar.line.fill.background()
             self._add_text(
-                slide, ov.subtitle, left=MARGIN_X, top=Emu(y),
-                width=Inches(2.65), height=Inches(0.8),
+                slide, ov.subtitle,
+                left=Emu(MARGIN_X + int(Inches(0.17))), top=Emu(y),
+                width=Inches(2.5), height=Inches(0.8),
                 font=self.style.typography.body_font, size=11,
                 color=self._muted_on_background(), anchor=MSO_ANCHOR.MIDDLE,
                 line_spacing=1.1,
@@ -379,13 +421,23 @@ class DigestBuilder:
         y_end = y
         for bi, blk in enumerate(blocks[:2]):
             cx0, cx1 = cols[bi] if bi < len(cols) else cols[-1]
+            title = blk.title + ":"
+            # название блока — на светло-сиреневой подложке, текст сиреневый
+            plate_w = min(int(Inches(0.108)) * len(title) + int(Inches(0.22)),
+                          cx1 - cx0)
+            plate = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE, Emu(cx0), Emu(y),
+                Emu(plate_w), int(Inches(0.27)))
+            plate.adjustments[0] = 0.4
+            self._fill_solid(plate, "EFE9FB")
+            plate.line.fill.background()
             self._add_text(
-                slide, blk.title + ":", left=Emu(cx0), top=Emu(y),
-                width=Emu(cx1 - cx0), height=Inches(0.24),
+                slide, title, left=Emu(cx0 + int(Inches(0.11))), top=Emu(y),
+                width=Emu(plate_w - int(Inches(0.11))), height=int(Inches(0.27)),
                 font=self.style.typography.heading_font, size=9.5, bold=True,
-                color=C.to_hex(self._accent_ink_on_bg(), with_hash=False),
+                color="7C3AED", anchor=MSO_ANCHOR.MIDDLE,
             )
-            py = y + int(Inches(0.27))
+            py = y + int(Inches(0.32))
             px = cx0
             line_h = int(Inches(0.30))
             for tag in blk.tags:
@@ -478,8 +530,8 @@ class DigestBuilder:
     def _ov_topic_height(self, t) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
         title_w = int(Inches(8.7)) - x_title
-        title_lines = self._wrap_lines(t.title, title_w, 11)
-        h = int(Inches(0.26)) * title_lines + int(Inches(0.02))
+        title_lines = self._wrap_lines(t.title, title_w, 14)
+        h = int(Inches(0.30)) * title_lines + int(Inches(0.02))
         if getattr(t, "quote", None):
             h += self._ov_quote_height(t.quote)
         h += int(Inches(0.18))  # разделитель + нижний зазор
@@ -495,13 +547,13 @@ class DigestBuilder:
             font=self.style.typography.heading_font, size=11, bold=True,
             color=self._accent_ink_on_bg(), anchor=MSO_ANCHOR.TOP,
         )
-        # заголовок
-        title_lines = self._wrap_lines(t.title, title_w, 11)
-        title_h = int(Inches(0.26)) * title_lines
+        # заголовок — шрифт тем SB Sans Text, размер 14
+        title_lines = self._wrap_lines(t.title, title_w, 14)
+        title_h = int(Inches(0.30)) * title_lines
         self._add_text(
             slide, t.title, left=Emu(x_title), top=Emu(y),
             width=Emu(title_w), height=Emu(title_h),
-            font=self.style.typography.heading_font, size=11, bold=True,
+            font="SB Sans Text", size=14, bold=True,
             color=self._text_on_background(), anchor=MSO_ANCHOR.TOP, line_spacing=1.0,
         )
         # правые метрики (на уровне заголовка)
