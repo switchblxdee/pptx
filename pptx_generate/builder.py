@@ -525,7 +525,9 @@ class DigestBuilder:
     def _ov_quote_height(self, quote) -> int:
         qw = int(Inches(8.55)) - (MARGIN_X + int(Inches(0.45)))
         lines = self._wrap_lines(quote, qw - int(Inches(0.3)), 9)
-        return max(int(Inches(0.36)), int(Inches(0.19)) * lines + int(Inches(0.18)))
+        # без подложки высоту считаем по самому тексту (раньше +0.18" был
+        # внутренний отступ плашки — из-за него комментарий «провисал» вниз)
+        return max(int(Inches(0.24)), int(Inches(0.19)) * lines + int(Inches(0.04)))
 
     def _ov_topic_height(self, t) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
@@ -617,7 +619,7 @@ class DigestBuilder:
             slide, "«" + quote + "»", left=Emu(x + int(Inches(0.2))), top=Emu(y),
             width=Emu(qw - int(Inches(0.36))), height=Emu(qh),
             font=self.style.typography.body_font, size=9, italic=True,
-            color=self._muted_on_background(), anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.0,
+            color=self._muted_on_background(), anchor=MSO_ANCHOR.TOP, line_spacing=1.0,
         )
         return y + qh
 
