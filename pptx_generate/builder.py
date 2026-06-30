@@ -268,6 +268,9 @@ class DigestBuilder:
     _OV_BOTTOM = Inches(6.9)      # нижняя граница контента (над легендой)
     _OV_RIGHT = SLIDE_WIDTH - MARGIN_X
     _PEACH = "F4C99A"             # плашка-заголовок группы (тёплый бренд-тон)
+    # ширина символа на 1pt для заголовков тем (шрифт SB Sans Text — узкий).
+    # 0.0095 (дефолт _wrap_lines) завышал число строк → комментарий проваливался.
+    _TITLE_CHAR_W = 0.0080
 
     def _build_overview(self, ov) -> None:
         slide = self._new_slide(cover=False)
@@ -532,7 +535,7 @@ class DigestBuilder:
     def _ov_topic_height(self, t) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
         title_w = int(Inches(8.7)) - x_title
-        title_lines = self._wrap_lines(t.title, title_w, 14)
+        title_lines = self._wrap_lines(t.title, title_w, 14, self._TITLE_CHAR_W)
         h = int(Inches(0.30)) * title_lines + int(Inches(0.02))
         if getattr(t, "quote", None):
             h += self._ov_quote_height(t.quote)
@@ -550,7 +553,7 @@ class DigestBuilder:
             color=self._accent_ink_on_bg(), anchor=MSO_ANCHOR.TOP,
         )
         # заголовок — шрифт тем SB Sans Text, размер 14
-        title_lines = self._wrap_lines(t.title, title_w, 14)
+        title_lines = self._wrap_lines(t.title, title_w, 14, self._TITLE_CHAR_W)
         title_h = int(Inches(0.30)) * title_lines
         self._add_text(
             slide, t.title, left=Emu(x_title), top=Emu(y),
@@ -746,9 +749,16 @@ class DigestBuilder:
                            size=9, color=muted)
             x += w
 
-    def _wrap_lines(self, text: str, width_emu: int, size_pt: float) -> int:
-        """Грубая оценка числа строк для текста заданной ширины."""
-        char_w = Inches(0.0095) * size_pt
+    def _wrap_lines(self, text: str, width_emu: int, size_pt: float,
+                    char_w_factor: float = 0.0095) -> int:
+        """Грубая оценка числа строк для текста заданной ширины.
+
+        char_w_factor — ширина символа на 1pt кегля. Дефолт 0.0095 откалиброван
+        под широкие шрифты; для узкого SB Sans Text заголовков передаём меньше
+        (иначе длинный заголовок ошибочно считается двухстрочным и комментарий
+        под ним проваливается).
+        """
+        char_w = Inches(char_w_factor) * size_pt
         per_line = max(1, int(width_emu / char_w))
         return max(1, -(-len(text) // per_line))
 
