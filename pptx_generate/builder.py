@@ -443,8 +443,13 @@ class DigestBuilder:
             py = y + int(Inches(0.32))
             px = cx0
             line_h = int(Inches(0.30))
+            # блок чатов (первый) — пилюли на сиреневой подложке
+            if bi == 0:
+                pill_fill = self._tint(self._obj_color, 0.80) if self._obj_color else "E7DEFA"
+            else:
+                pill_fill = "FFFFFF"
             for tag in blk.tags:
-                px, py = self._ov_pill(slide, tag, px, py, cx0, cx1, line_h)
+                px, py = self._ov_pill(slide, tag, px, py, cx0, cx1, line_h, pill_fill)
             y_end = max(y_end, py + line_h)
         return y_end + int(Inches(0.04))
 
@@ -456,7 +461,7 @@ class DigestBuilder:
             return acc
         return self._text_on_background()
 
-    def _ov_pill(self, slide, text, x, y, col_left, col_right, line_h):
+    def _ov_pill(self, slide, text, x, y, col_left, col_right, line_h, fill="FFFFFF"):
         char_w = int(Inches(0.052))
         pad = int(Inches(0.24))
         ph = int(Inches(0.24))
@@ -467,14 +472,14 @@ class DigestBuilder:
         pill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                       Emu(x), Emu(y), Emu(w), Emu(ph))
         pill.adjustments[0] = 0.5
-        self._fill_solid(pill, "FFFFFF")
+        self._fill_solid(pill, fill)
         pill.line.color.rgb = self._rgb(self._obj_color or "D7DCE3")
         pill.line.width = Pt(1.0 if self._obj_color else 0.75)
         self._add_text(
             slide, text, left=Emu(x), top=Emu(y),
             width=Emu(w), height=Emu(ph),
             font=self.style.typography.body_font, size=7.5,
-            on="FFFFFF", role="strong",
+            on=fill, role="strong",
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
         )
         return x + w + int(Inches(0.08)), y
@@ -507,7 +512,7 @@ class DigestBuilder:
         self._add_text(
             slide, name, left=MARGIN_X + int(Inches(0.2)), top=Emu(y),
             width=Inches(8.3), height=Inches(0.34),
-            font=self.style.typography.heading_font, size=11, bold=True,
+            font=self.style.typography.heading_font, size=11, bold=False,
             on=barcol, role="strong", anchor=MSO_ANCHOR.MIDDLE,
         )
         lbl = self._ink(barcol, role="muted", size_pt=8)
@@ -527,10 +532,9 @@ class DigestBuilder:
 
     def _ov_quote_height(self, quote) -> int:
         qw = int(Inches(8.55)) - (MARGIN_X + int(Inches(0.45)))
-        lines = self._wrap_lines(quote, qw - int(Inches(0.3)), 9)
-        # без подложки высоту считаем по самому тексту (раньше +0.18" был
-        # внутренний отступ плашки — из-за него комментарий «провисал» вниз)
-        return max(int(Inches(0.24)), int(Inches(0.19)) * lines + int(Inches(0.04)))
+        lines = self._wrap_lines(quote, qw - int(Inches(0.3)), 11)
+        # без подложки высоту считаем по самому тексту (11pt ≈ 0.22"/строка)
+        return max(int(Inches(0.26)), int(Inches(0.22)) * lines + int(Inches(0.04)))
 
     def _ov_topic_height(self, t) -> int:
         x_title = MARGIN_X + int(Inches(0.45))
@@ -621,7 +625,7 @@ class DigestBuilder:
         self._add_text(
             slide, "«" + quote + "»", left=Emu(x + int(Inches(0.2))), top=Emu(y),
             width=Emu(qw - int(Inches(0.36))), height=Emu(qh),
-            font=self.style.typography.body_font, size=9, italic=True,
+            font="SB Sans Text Light", size=11, italic=True,
             color=self._muted_on_background(), anchor=MSO_ANCHOR.TOP, line_spacing=1.0,
         )
         return y + qh
@@ -725,7 +729,7 @@ class DigestBuilder:
         parts = [
             ("✳ ", "0FB880", "в списке болей    "),
             ("⌕ ", muted, "на анализе (кандидат в боль)    "),
-            ("▲▼≡ ", muted, "рост/сокращение/стабильность сигналов к прошлой неделе    "),
+            ("▲▼≡ ", muted, "  рост/сокращение/стабильность сигналов к прошлой неделе    "),
             ("■ ", self.palette.badge, "new — новая тема"),
         ]
         x = MARGIN_X
@@ -738,6 +742,22 @@ class DigestBuilder:
             elif glyph.startswith("⌕") and loupe_icon:
                 slide.shapes.add_picture(loupe_icon, Emu(x), Emu(y - int(Inches(0.01))),
                                          height=Inches(0.2))
+            elif glyph.startswith("▲"):
+                # стрелки — в цвет динамики: рост=красный, сокращение=зелёный,
+                # стабильность=серый (как в колонке «Динамика»)
+                tb = slide.shapes.add_textbox(Emu(x), Emu(y), Inches(0.5), Inches(0.25))
+                tf = tb.text_frame
+                tf.word_wrap = False
+                tf.margin_left = tf.margin_right = 0
+                tf.margin_top = tf.margin_bottom = 0
+                p = tf.paragraphs[0]
+                for ch, cc in [("▲", "E2362D"), ("▼", "0FB880"), ("≡", "64748B"), (" ", muted)]:
+                    r = p.add_run()
+                    r.text = ch
+                    r.font.size = Pt(9)
+                    r.font.bold = True
+                    r.font.name = self.style.typography.body_font
+                    r.font.color.rgb = self._rgb(cc)
             else:
                 self._add_text(slide, glyph, left=Emu(x), top=Emu(y), width=Inches(0.4),
                                height=Inches(0.25), font=self.style.typography.body_font,
