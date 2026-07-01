@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -246,16 +246,30 @@ def _anonymize(text: str) -> str:
 
 def _pick_quote(series) -> Optional[str]:
     """Самый содержательный комментарий: обезличенный, схлопнутый, обрезанный."""
-    cands = []
+    cands = _quote_candidates(series)
+    return cands[0] if cands else None
+
+
+def _quote_candidates(series, limit: int = 6) -> List[str]:
+    """Обезличенные кандидаты-комментарии темы, по убыванию длины, без дублей.
+
+    Возвращает список (а не один), чтобы выбор мог делать LLM. Фолбэк —
+    первый (самый длинный), что повторяет прежнее поведение _pick_quote.
+    """
+    seen = set()
+    cands: List[str] = []
     for v in series.dropna():
         s = _anonymize(" ".join(str(v).split()))
-        if s and len(s) >= 8:
-            cands.append(s)
-    if not cands:
-        return None
+        if not s or len(s) < 8:
+            continue
+        s = (s[:150].rstrip() + "…") if len(s) > 150 else s
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cands.append(s)
     cands.sort(key=len, reverse=True)
-    q = cands[0]
-    return (q[:150].rstrip() + "…") if len(q) > 150 else q
+    return cands[:limit]
 
 
 def _find_col(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
@@ -329,6 +343,7 @@ def read_overview(
     mapping: Optional[Dict[str, str]] = None,
     max_groups: int = 12,
     max_topics_per_group: int = 12,
+    comment_picker: Optional[Callable[[List[dict]], Dict[str, str]]] = None,
 ):
     """
     Возвращает (OverviewSlide, report).
@@ -364,10 +379,30 @@ def read_overview(
     # ---- индекс комментариев из «исх»: тема -> представительный комментарий ----
     comment_index: Dict[str, Tuple[str, str]] = {}   # ключ -> (тема_ориг, цитата)
     if c_l2 and c_text:
+        # все кандидаты по каждой теме (обезличенные, по убыванию длины)
+        cand_map: Dict[str, Tuple[str, List[str]]] = {}
         for l2, sub in df.dropna(subset=[c_l2]).groupby(c_l2, sort=False):
-            q = _pick_quote(sub[c_text])
-            if q:
-                comment_index[_match_key(l2)] = (str(l2), q)
+            cands = _quote_candidates(sub[c_text])
+            if cands:
+                cand_map[_match_key(l2)] = (str(l2), cands)
+
+        # выбор одного комментария на тему: LLM (если дан) → иначе самый длинный
+        chosen: Dict[str, str] = {}
+        if comment_picker and cand_map:
+            try:
+                picked = comment_picker([
+                    {"theme": o, "candidates": c} for (o, c) in cand_map.values()
+                ]) or {}
+                for k, (o, c) in cand_map.items():
+                    ch = picked.get(o)
+                    # валидируем: должно быть одним из кандидатов (без галлюцинаций)
+                    chosen[k] = ch if (isinstance(ch, str) and ch in c) else c[0]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("LLM-выбор комментариев не удался (%s) — беру самый длинный", e)
+                chosen = {}
+        if not chosen:
+            chosen = {k: c[0] for k, (o, c) in cand_map.items()}
+        comment_index = {k: (cand_map[k][0], chosen[k]) for k in chosen}
 
     def _comment_for(theme: str) -> Optional[str]:
         if not comment_index:

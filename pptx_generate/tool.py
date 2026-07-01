@@ -224,6 +224,14 @@ class GenerateDigestTool(BaseTool):
 
     llm: BaseChatModel = Field(description="LLM (обычно GigaChat) для генерации структуры")
     max_retries: int = Field(default=3, description="Сколько раз повторить при невалидном JSON")
+    llm_pick_comments: bool = Field(
+        default=True,
+        description=(
+            "Если True (по умолчанию) — для overview-дайджеста комментарий к каждой "
+            "теме выбирает LLM (самый показательный из кандидатов), а не эвристика "
+            "«самый длинный». При сбое/недоступности LLM автоматически откат к длине."
+        ),
+    )
     inject_system_prompt: bool = Field(
         default=False,
         description=(
@@ -316,6 +324,52 @@ class GenerateDigestTool(BaseTool):
         except Exception:
             return False
 
+    def _llm_comment_picker(self):
+        """Возвращает колбэк для read_overview: для каждой темы LLM выбирает
+        самый показательный комментарий из кандидатов. Возвращает
+        {тема: выбранный_текст}. Устойчив к сбоям (пустой dict → откат к длине).
+        """
+        def picker(items: list) -> dict:
+            if not items:
+                return {}
+            lines = []
+            for ti, it in enumerate(items):
+                lines.append(f"[Тема {ti}] {it['theme']}")
+                for ci, c in enumerate(it["candidates"]):
+                    lines.append(f"   {ci}) {c}")
+            sys_p = (
+                "Ты — редактор ИТ-дайджеста «Голос IT». Для каждой темы выбери ОДИН "
+                "самый показательный комментарий пользователя: живой, конкретный, "
+                "ясно отражающий суть проблемы темы. Избегай сумбурных, обрывочных, "
+                "неинформативных комментариев и тех, что просто повторяют название "
+                "темы. Верни СТРОГО JSON без пояснений и текста вокруг: объект, где "
+                "ключ — номер темы (строкой), значение — номер выбранного "
+                'комментария (целое). Пример: {"0": 2, "1": 0}.'
+            )
+            user_p = "Темы и комментарии-кандидаты:\n\n" + "\n".join(lines)
+            try:
+                resp = self.llm.invoke(
+                    [SystemMessage(content=sys_p), HumanMessage(content=user_p)])
+                text = getattr(resp, "content", None) or str(resp)
+                data = repair_json(text)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("LLM-выбор комментариев: ошибка вызова/JSON (%s)", e)
+                return {}
+            if not isinstance(data, dict):
+                return {}
+            out: dict = {}
+            for ti, it in enumerate(items):
+                idx = data.get(str(ti), data.get(ti))
+                try:
+                    idx = int(idx)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < len(it["candidates"]):
+                    out[it["theme"]] = it["candidates"][idx]
+            return out
+
+        return picker
+
     def _generate_overview(
         self,
         xlsx_path: str,
@@ -341,7 +395,8 @@ class GenerateDigestTool(BaseTool):
         kwargs = {}
         if overview_title:
             kwargs["title"] = overview_title
-        overview, report = read_overview(xlsx_path, **kwargs)
+        picker = self._llm_comment_picker() if self.llm_pick_comments else None
+        overview, report = read_overview(xlsx_path, comment_picker=picker, **kwargs)
         logger.info("\n%s", format_report(report))
 
         # период и номер: явный параметр от агента > значение из листа «динамика»
