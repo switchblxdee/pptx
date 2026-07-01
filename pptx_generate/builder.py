@@ -422,6 +422,23 @@ class DigestBuilder:
                 (col_split, int(self._OV_RIGHT)),
             ]
         y_end = y
+        # общая мягкая подложка под оба блока источников
+        src_bottom = y
+        for bi, blk in enumerate(blocks[:2]):
+            cx0, cx1 = cols[bi] if bi < len(cols) else cols[-1]
+            src_bottom = max(src_bottom, self._sim_block_bottom(blk.tags, cx0, cx1, y))
+        pad_x = int(Inches(0.14))
+        p_left = MARGIN_X - pad_x
+        p_right = int(self._OV_RIGHT) + pad_x
+        p_top = y - int(Inches(0.12))
+        p_bottom = src_bottom + int(Inches(0.14))
+        panel = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE, Emu(p_left), Emu(p_top),
+            Emu(p_right - p_left), Emu(p_bottom - p_top))
+        panel.adjustments[0] = 0.14
+        self._fill_solid(panel, self._tint(self._obj_color, 0.93) if self._obj_color else "F7F4FC")
+        panel.line.fill.background()          # без жёсткой обводки
+        self._apply_subtle_shadow(panel)      # мягкая тень вместо рамки
         for bi, blk in enumerate(blocks[:2]):
             cx0, cx1 = cols[bi] if bi < len(cols) else cols[-1]
             title = blk.title + ":"
@@ -451,7 +468,8 @@ class DigestBuilder:
             for tag in blk.tags:
                 px, py = self._ov_pill(slide, tag, px, py, cx0, cx1, line_h, pill_fill)
             y_end = max(y_end, py + line_h)
-        return y_end + int(Inches(0.04))
+        # следующий элемент — ниже панели (иначе заголовок группы наезжает)
+        return p_bottom + int(Inches(0.12))
 
     def _accent_ink_on_bg(self) -> str:
         """Акцент, читаемый на фоне слайда (для подзаголовков секций)."""
@@ -483,6 +501,22 @@ class DigestBuilder:
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
         )
         return x + w + int(Inches(0.08)), y
+
+    def _sim_block_bottom(self, tags, cx0, cx1, y) -> int:
+        """Симулирует раскладку пилюль блока (как _ov_pill) и возвращает
+        нижнюю границу — чтобы заранее знать высоту для общей плашки-подложки."""
+        char_w = int(Inches(0.052))
+        pad = int(Inches(0.24))
+        line_h = int(Inches(0.30))
+        px = cx0
+        py = y + int(Inches(0.32))
+        for text in tags:
+            w = min(len(text) * char_w + pad, cx1 - cx0)
+            if px + w > cx1 and px > cx0:
+                px = cx0
+                py += line_h
+            px = px + w + int(Inches(0.08))
+        return py + line_h
 
     def _ov_columns_header(self, slide, y: int) -> int:
         # правые подписи колонок над группами

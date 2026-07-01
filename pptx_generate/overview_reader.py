@@ -275,6 +275,41 @@ def _pick_sheet(xls: pd.ExcelFile, keywords: List[str]) -> Optional[str]:
     return None
 
 
+def _scan_labeled_value(xls, sheet: str, keywords: List[str]) -> Optional[str]:
+    """Ищет в листе ячейку-метку (содержит одно из keywords) и возвращает
+    значение рядом: справа, затем снизу, затем хвост после «:» в самой ячейке.
+
+    Нужно для служебных полей вроде «Период» / «Номер дайджеста», которые лежат
+    вне основной таблицы (в шапке листа «динамика»).
+    """
+    try:
+        raw = pd.read_excel(xls, sheet_name=sheet, header=None, dtype=object)
+    except Exception:
+        return None
+    nrows, ncols = raw.shape
+    for i in range(nrows):
+        for j in range(ncols):
+            cell = raw.iat[i, j]
+            if cell is None or (isinstance(cell, float) and pd.isna(cell)):
+                continue
+            s = str(cell).strip().lower()
+            if not any(kw in s for kw in keywords):
+                continue
+            # значение справа, затем снизу
+            for ri, rj in ((i, j + 1), (i + 1, j)):
+                if 0 <= ri < nrows and 0 <= rj < ncols:
+                    v = raw.iat[ri, rj]
+                    if v is not None and not (isinstance(v, float) and pd.isna(v)) \
+                            and str(v).strip():
+                        return str(v).strip()
+            # «Период: 21–27 мая» в одной ячейке
+            if ":" in str(cell):
+                tail = str(cell).split(":", 1)[1].strip()
+                if tail:
+                    return tail
+    return None
+
+
 def read_overview(
     xlsx_path: str,
     title: str = "Голос IT: дайджест для программы AI PDLC",
@@ -437,6 +472,13 @@ def read_overview(
         OverviewKPI(value=str(int(active_themes)), label="Активных тем", icon_hint="growth"),
         OverviewKPI(value=str(int(new_count)), label="Новых тем", icon_hint="info"),
     ]
+
+    # ---- служебные поля из «динамика»: период и номер дайджеста ----
+    period_val = _scan_labeled_value(xls, dyn_sheet, ["период"])
+    issue_val = _scan_labeled_value(
+        xls, dyn_sheet, ["номер дайдж", "№ дайдж", "номер выпуск", "номер дайджеста"])
+    report["_period"] = period_val
+    report["_issue_number"] = issue_val
 
     overview = OverviewSlide(
         title=title, subtitle=subtitle, kpis=kpis,

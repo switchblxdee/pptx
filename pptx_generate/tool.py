@@ -344,6 +344,15 @@ class GenerateDigestTool(BaseTool):
         overview, report = read_overview(xlsx_path, **kwargs)
         logger.info("\n%s", format_report(report))
 
+        # период и номер: явный параметр от агента > значение из листа «динамика»
+        period_final = period or report.get("_period") or ""
+        issue_src = issue_number or report.get("_issue_number")
+        if issue_src:
+            issue_src = str(issue_src).strip()
+            issue_final = issue_src if "№" in issue_src else f"№ {issue_src}"
+        else:
+            issue_final = "№ — / еженедельный"
+
         # минимальный валидный spec; контент рисуется из overview
         base_palette = ColorPalette(
             gradient_start="FAFAF7", gradient_end="FFFFFF",
@@ -355,8 +364,8 @@ class GenerateDigestTool(BaseTool):
             style=DigestStyle(palette=base_palette),
             meta=DigestMeta(
                 issue_date=date.today().strftime("%d.%m.%Y"),
-                period=period or "",
-                issue_number=issue_number or "№ — / еженедельный",
+                period=period_final,
+                issue_number=issue_final,
             ),
             cover=CoverSlide(
                 title="Голос IT", subtitle="—",
