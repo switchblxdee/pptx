@@ -275,13 +275,23 @@ def _pick_sheet(xls: pd.ExcelFile, keywords: List[str]) -> Optional[str]:
     return None
 
 
+_LABEL_WORDS = ("период", "номер", "дайдж", "выпуск", "продукт", "тема",
+                "статус", "динамик", "сигнал", "недел", "кол-во")
+
+
 def _scan_labeled_value(xls, sheet: str, keywords: List[str]) -> Optional[str]:
     """Ищет в листе ячейку-метку (содержит одно из keywords) и возвращает
-    значение рядом: справа, затем снизу, затем хвост после «:» в самой ячейке.
+    значение рядом. Порядок: хвост после «:» в самой ячейке → СНИЗУ → справа.
 
-    Нужно для служебных полей вроде «Период» / «Номер дайджеста», которые лежат
-    вне основной таблицы (в шапке листа «динамика»).
+    «Снизу» приоритетнее, потому что «Период»/«Номер дайджеста» оформлены как
+    заголовки столбцов, а значение стоит в строке под ними. Кандидаты, которые
+    сами являются метками (другой заголовок), отбрасываются — иначе «Период»
+    цеплял соседний «Номер дайджеста».
     """
+    def _is_label(v) -> bool:
+        s = str(v).strip().lower()
+        return any(w in s for w in _LABEL_WORDS)
+
     try:
         raw = pd.read_excel(xls, sheet_name=sheet, header=None, dtype=object)
     except Exception:
@@ -295,18 +305,20 @@ def _scan_labeled_value(xls, sheet: str, keywords: List[str]) -> Optional[str]:
             s = str(cell).strip().lower()
             if not any(kw in s for kw in keywords):
                 continue
-            # значение справа, затем снизу
-            for ri, rj in ((i, j + 1), (i + 1, j)):
-                if 0 <= ri < nrows and 0 <= rj < ncols:
-                    v = raw.iat[ri, rj]
-                    if v is not None and not (isinstance(v, float) and pd.isna(v)) \
-                            and str(v).strip():
-                        return str(v).strip()
             # «Период: 21–27 мая» в одной ячейке
             if ":" in str(cell):
                 tail = str(cell).split(":", 1)[1].strip()
                 if tail:
                     return tail
+            # значение снизу, затем справа; пропускаем ячейки-метки
+            for ri, rj in ((i + 1, j), (i, j + 1)):
+                if 0 <= ri < nrows and 0 <= rj < ncols:
+                    v = raw.iat[ri, rj]
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        continue
+                    if not str(v).strip() or _is_label(v):
+                        continue
+                    return str(v).strip()
     return None
 
 
